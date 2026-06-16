@@ -1,6 +1,6 @@
 {
-  "name": "studio2-vercel-v10-command-studio",
-  "version": "10.0.0",
+  "name": "studio2-vercel-v10-2-smart-bundle",
+  "version": "10.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -21,5 +21,6 @@
     "typescript": "^5.5.3",
     "xlsx": "^0.18.5"
   },
-  "devDependencies": {}
+  "devDependencies": {},
+  "description": "Lokalmart Studio2 v10.2 Vercel-only Odoo Smart Bundle Export"
 }

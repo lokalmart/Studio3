@@ -1,12 +1,3 @@
 # Clean Slate Note
 
-Kalau repo sebelumnya berisi versi HTML lama, hapus file lama berikut sebelum upload v10:
-
-```text
-index.html
-assistant.html
-api/odoo.js
-scripts/check-html.js
-```
-
-Untuk repo baru clean slate, cukup upload semua isi ZIP v10 ke root repo.
+Untuk repo baru/clean slate, cukup upload seluruh isi ZIP v10.2 ke root repo. Jangan campur dengan file lama seperti `index.html`, `assistant.html`, atau `api/odoo.js` dari versi HTML lama.

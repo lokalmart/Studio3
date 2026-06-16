@@ -1,40 +1,99 @@
-# Studio2 v10 — Lokalmart Data Command Studio
+# Studio2 v10.2 — Smart Bundle Export
 
-Studio2 v10 adalah rebuild UI/UX untuk Vercel-only deployment. Fokusnya bukan lagi “spreadsheet viewer”, tetapi **mission-based command studio** untuk operasi data Odoo Lokalmart.
+Studio2 v10.2 adalah versi Vercel-only yang tetap fokus pada **Import / Export / Review data Odoo**, tetapi sekarang Export sudah punya **Smart Bundle**.
 
-## Prinsip desain v10
+Smart Bundle bukan fitur AI context. Fitur ini murni untuk membawa record Odoo beserta data yang memang berkaitan secara operasional.
 
-- Mobile-first, bukan desktop panel yang dipaksa mengecil.
-- Home sebagai **Mission Launcher**: Import, Export, Review, Koneksi.
-- Export model berupa checklist card, bukan input teks mentah.
-- Spreadsheet grid hanya mode tambahan; default editor berupa object cards.
-- Progressive disclosure: schema, domain, field teknis, dan log disembunyikan sampai dibutuhkan.
-- Vercel-safe: browser membaca XLSX, API hanya request kecil ke Odoo.
+## Apa yang baru di v10.2
 
-## Fitur utama
+### 1. Smart Bundle Export
 
-### Import Mission
+Export tidak lagi hanya “satu model satu sheet”. Admin bisa memilih objek utama, lalu Studio2 mengekspor sheet relasi yang relevan.
 
-Upload XLSX → Review sheet → Cek schema → Object editor → Import batch kecil ke Odoo.
+Preset bundle:
 
-### Export Mission
+- **Project Bundle**
+  - `project.project`
+  - `project.task`
+  - `project.milestone`
+  - `project.update`
+  - `project.task.type`
+  - `res.partner`
+  - `res.users`
+  - `task_hierarchy`
+  - `relationship_map`
+  - `README_EXPORT`
 
-Pilih model via checklist card → Scan record → Pilih record → Export ke editor → Download XLSX.
+- **Contact Bundle**
+  - `res.partner`
+  - child contacts / address
+  - `res.partner.category`
+  - optional: `sale.order`
+  - optional: `project.task`
 
-Preset model:
+- **Product Bundle**
+  - `product.template`
+  - `product.product`
+  - `product.supplierinfo`
+  - `product.category`
+  - `product.public.category`
+  - `uom.uom`
 
-- Contacts (`res.partner`)
-- Products (`product.template`)
-- Projects (`project.project`)
-- Tasks (`project.task`)
-- Knowledge (`knowledge.article`)
-- Sales (`sale.order`)
-- Categories (`product.category`)
-- Web Categories (`product.public.category`)
+- **Sales Bundle**
+  - `sale.order`
+  - `sale.order.line`
+  - related `res.partner`
+  - related `product.product` / `product.template`
+  - related `res.users`
 
-### Review Workspace
+- **Knowledge Bundle**
+  - `knowledge.article`
+  - child articles
+  - parent article reference
 
-Default editor berupa card accordion per row. Grid spreadsheet tetap tersedia untuk edit cepat di desktop.
+### 2. Single Model tetap ada
+
+Untuk pekerjaan cepat, admin tetap bisa export model biasa:
+
+- `res.partner`
+- `product.template`
+- `project.project`
+- `project.task`
+- `knowledge.article`
+- `sale.order`
+- model custom
+
+### 3. Review Workspace tetap menjadi quality gate
+
+Hasil export bundle langsung masuk ke Review Workspace sebagai banyak sheet. Admin bisa:
+
+- memilih sheet,
+- cek schema,
+- edit object card,
+- buka grid,
+- download XLSX,
+- import sheet aktif.
+
+## Flow utama
+
+### Export Smart Bundle
+
+1. Buka **Export**.
+2. Pilih **Smart Bundle**.
+3. Pilih Project Bundle / Contact Bundle / Product Bundle / Sales Bundle / Knowledge Bundle.
+4. Klik **Scan record utama**.
+5. Pilih record utama.
+6. Klik **Export Bundle**.
+7. Hasil multi-sheet masuk ke Review Workspace.
+
+### Import validasi XLSX barcode scanner
+
+1. Buka **Import**.
+2. Upload XLSX dari web app barcode scanner.
+3. Studio2 mendeteksi sheet `product.template` / product.
+4. Admin cek foto, barcode, harga, vendor, kategori, dan field wajib.
+5. Admin edit yang kosong.
+6. Import batch kecil ke Odoo.
 
 ## Deploy ke Vercel
 
@@ -69,10 +128,10 @@ Credential disimpan di browser `localStorage`, bukan di GitHub.
 
 ## Catatan batasan Vercel
 
-Studio2 v10 tetap memakai Vercel serverless, jadi jangan paksa satu request untuk export/import semua database. Gunakan pola aman:
+Studio2 tetap memakai Vercel serverless, jadi Smart Bundle harus dipakai secara bertahap:
 
-- Import 10–30 row per batch.
-- Export record terpilih, bukan full database mentah.
-- Pilih field seperlunya.
-- Hindari chatter, HTML panjang, dan image base64 kecuali benar-benar perlu.
-
+- pilih record utama dulu,
+- jangan export full database,
+- hindari chatter dan image base64,
+- gunakan bundle yang relevan saja,
+- relasi opsional seperti sales/project pada Contact Bundle hanya dicentang jika perlu.

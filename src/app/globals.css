@@ -208,3 +208,23 @@ td input { width:180px; border:1px solid transparent; background:rgba(255,255,25
   .object-head { align-items:flex-start; }
   .chip { display:none; }
 }
+
+/* v10.2 Smart Bundle Export */
+.mode-switch { display:flex; gap:8px; overflow-x:auto; border:1px solid var(--line); border-radius:24px; background:rgba(255,255,255,.04); padding:8px; }
+.mode-switch .tab { flex:1; min-width:150px; }
+.bundle-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+.bundle-card { min-height:190px; text-align:left; border:1px solid var(--line); border-radius:26px; background:linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.03)); padding:16px; transition:.18s ease; }
+.bundle-card.active, .bundle-card:hover { border-color:rgba(52,232,210,.48); background:linear-gradient(145deg, rgba(52,232,210,.14), rgba(124,109,255,.08)); transform:translateY(-1px); }
+.bundle-card b, .bundle-card small, .bundle-card em { display:block; }
+.bundle-card b { margin-top:14px; font-size:19px; letter-spacing:-.04em; }
+.bundle-card small { margin-top:8px; color:#b4c0d5; line-height:1.48; }
+.bundle-card em { margin-top:14px; color:#89f8e5; font-style:normal; font-size:12px; }
+.compact-card { display:grid; gap:8px; }
+.compact-card b { display:block; font-size:16px; }
+.compact-card small { color:var(--muted); }
+.include-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }
+.include-list label { display:flex; gap:8px; align-items:center; border:1px solid var(--line); border-radius:16px; padding:10px; background:rgba(255,255,255,.045); color:#dce7fb; font-size:13px; }
+@media (max-width: 900px) {
+  .bundle-grid { grid-template-columns:1fr; }
+  .include-list { grid-template-columns:1fr; }
+}

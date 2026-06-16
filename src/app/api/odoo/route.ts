@@ -360,6 +360,168 @@ async function handleExportProject(conn: Conn, body: AnyRow) {
   return { ok: true, sheets: out };
 }
 
+
+function idsFromRel(value: any): number[] {
+  if (value === null || value === undefined || value === false) return [];
+  if (typeof value === 'number') return Number.isFinite(value) ? [value] : [];
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return [Number(value.trim())];
+  if (Array.isArray(value)) {
+    // many2one from search_read usually comes as [id, display_name]
+    if (value.length === 2 && typeof value[0] === 'number' && typeof value[1] === 'string') return [Number(value[0])].filter(Boolean);
+    // many2many/one2many usually comes as [1,2,3]
+    return value.flatMap(v => idsFromRel(v)).filter(Boolean);
+  }
+  return [];
+}
+
+function uniqNums(values: number[]) {
+  return Array.from(new Set(values.map(Number).filter(Boolean)));
+}
+
+function collectIds(records: AnyRow[], fields: string[]) {
+  return uniqNums(records.flatMap(row => fields.flatMap(field => idsFromRel(row[field]))));
+}
+
+async function tryExportSheetAs(conn: Conn, uid: number, out: Record<string, AnyRow[]>, sheetName: string, model: string, domain: any[], fields: string[], limit = 5000) {
+  try {
+    const schema = await fieldsGet(conn, uid, model);
+    const realFields = ['id', ...fields.filter(f => schema[f] && f !== 'id')];
+    const records = await executeKw(conn, uid, model, 'search_read', [domain], { fields: realFields, limit, order: 'id asc' });
+    const ids = (records || []).map((r: AnyRow) => Number(r.id)).filter(Boolean);
+    const extMap = await mapExternalIdsForModel(conn, uid, model, ids);
+    out[sheetName] = (records || []).map((r: AnyRow) => sanitizeExportRow({
+      _model: model,
+      __action: 'upsert',
+      _external_id: extMap.get(Number(r.id)) || '',
+      x_studio2_odoo_id: r.id,
+      ...r
+    }));
+    return records || [];
+  } catch (err: any) {
+    out[`${sheetName}_error`] = [{ _model: model, error: err?.message || String(err) }];
+    return [];
+  }
+}
+
+async function tryExportSheet(conn: Conn, uid: number, out: Record<string, AnyRow[]>, model: string, domain: any[], fields: string[], limit = 5000) {
+  return tryExportSheetAs(conn, uid, out, model, model, domain, fields, limit);
+}
+
+function addRelationship(out: Record<string, AnyRow[]>, fromModel: string, fromIds: number[], relationName: string, toModel: string, toIds: number[], note = '') {
+  if (!out.relationship_map) out.relationship_map = [];
+  out.relationship_map.push({
+    from_model: fromModel,
+    from_ids: uniqNums(fromIds).join(','),
+    relation: relationName,
+    to_model: toModel,
+    to_ids: uniqNums(toIds).join(','),
+    note
+  });
+}
+
+function addBundleReadme(out: Record<string, AnyRow[]>, bundle: string, primaryModel: string, ids: number[], summary: AnyRow) {
+  out.README_EXPORT = [{
+    bundle,
+    primary_model: primaryModel,
+    primary_ids: ids.join(','),
+    exported_at: new Date().toISOString(),
+    note: 'Smart Bundle Export Studio2. Sheet utama dan sheet relasi dibuat untuk review/edit/import ulang Odoo. Relasi tetap disimpan sebagai field Odoo mentah plus x_studio2_odoo_id/external id jika tersedia.',
+    summary: JSON.stringify(summary).slice(0, SAFE_CELL_LIMIT)
+  }];
+}
+
+async function handleExportBundle(conn: Conn, body: AnyRow) {
+  const uid = await login(conn);
+  const bundle = String(body.bundle || '').trim() || 'single';
+  const primaryModel = String(body.primary_model || body.model || '').trim();
+  const ids = uniqNums((body.ids || []).map((x: any) => Number(x)));
+  const includes = body.includes || {};
+  if (!primaryModel) throw new Error('Primary model kosong.');
+  if (!ids.length) throw new Error('Belum ada record utama dipilih.');
+
+  const out: Record<string, AnyRow[]> = {};
+  const summary: AnyRow = { bundle, primary_model: primaryModel, primary_count: ids.length };
+
+  if (bundle === 'project') {
+    const projects = await tryExportSheet(conn, uid, out, 'project.project', [['id', 'in', ids]], ['name', 'display_name', 'partner_id', 'user_id', 'date_start', 'date', 'description', 'privacy_visibility', 'stage_id', 'active']);
+    const tasks = await tryExportSheet(conn, uid, out, 'project.task', [['project_id', 'in', ids]], ['name', 'display_name', 'project_id', 'parent_id', 'stage_id', 'user_id', 'user_ids', 'partner_id', 'date_deadline', 'description', 'priority', 'sequence', 'active', 'kanban_state']);
+    const taskIds = tasks.map((r: AnyRow) => Number(r.id)).filter(Boolean);
+    const partnerIds = uniqNums([...collectIds(projects, ['partner_id']), ...collectIds(tasks, ['partner_id'])]);
+    const userIds = uniqNums([...collectIds(projects, ['user_id']), ...collectIds(tasks, ['user_id', 'user_ids'])]);
+    const stageIds = collectIds(tasks, ['stage_id']);
+    await tryExportSheet(conn, uid, out, 'project.milestone', [['project_id', 'in', ids]], ['name', 'display_name', 'project_id', 'deadline', 'is_reached', 'sequence']);
+    await tryExportSheet(conn, uid, out, 'project.update', [['project_id', 'in', ids]], ['name', 'display_name', 'project_id', 'status', 'progress', 'description']);
+    if (partnerIds.length) await tryExportSheet(conn, uid, out, 'res.partner', [['id', 'in', partnerIds]], ['name', 'display_name', 'email', 'phone', 'mobile', 'street', 'city', 'is_company', 'customer_rank', 'supplier_rank', 'category_id']);
+    if (userIds.length) await tryExportSheet(conn, uid, out, 'res.users', [['id', 'in', userIds]], ['name', 'login', 'partner_id', 'active']);
+    if (stageIds.length) await tryExportSheet(conn, uid, out, 'project.task.type', [['id', 'in', stageIds]], ['name', 'sequence', 'fold', 'project_ids']);
+    out.task_hierarchy = tasks.map((t: AnyRow) => ({ task_id: t.id, task_name: t.name || t.display_name, project_id: idsFromRel(t.project_id).join(','), parent_id: idsFromRel(t.parent_id).join(','), stage_id: idsFromRel(t.stage_id).join(','), sequence: t.sequence, deadline: t.date_deadline }));
+    addRelationship(out, 'project.project', ids, 'project_id', 'project.task', taskIds, 'Semua task/subtask dalam project terpilih.');
+    addRelationship(out, 'project.project/project.task', ids.concat(taskIds), 'partner_id', 'res.partner', partnerIds, 'Partner/customer/vendor terkait project dan task.');
+    addRelationship(out, 'project.project/project.task', ids.concat(taskIds), 'user_id/user_ids', 'res.users', userIds, 'Responsible/user reference.');
+    summary.tasks = taskIds.length; summary.partners = partnerIds.length; summary.users = userIds.length;
+  } else if (bundle === 'contact') {
+    const partners = await tryExportSheet(conn, uid, out, 'res.partner', [['id', 'in', ids]], ['name', 'display_name', 'parent_id', 'child_ids', 'email', 'phone', 'mobile', 'street', 'street2', 'city', 'state_id', 'country_id', 'is_company', 'customer_rank', 'supplier_rank', 'category_id', 'comment', 'active']);
+    const children = await tryExportSheetAs(conn, uid, out, 'res.partner.children', 'res.partner', [['parent_id', 'in', ids]], ['name', 'display_name', 'parent_id', 'email', 'phone', 'mobile', 'street', 'city', 'type', 'active'], 2000);
+    // Keep import-safe model name in rows even if sheet name is an alias.
+    if (out['res.partner.children']) out['res.partner.children'] = out['res.partner.children'].map(r => ({ ...r, _model: 'res.partner' }));
+    const allPartners = uniqNums([...ids, ...children.map((r: AnyRow) => Number(r.id)).filter(Boolean)]);
+    const tagIds = uniqNums([...collectIds(partners, ['category_id']), ...collectIds(children, ['category_id'])]);
+    if (tagIds.length) await tryExportSheet(conn, uid, out, 'res.partner.category', [['id', 'in', tagIds]], ['name', 'display_name', 'parent_id', 'active']);
+    if (includes.sales) {
+      const orders = await tryExportSheet(conn, uid, out, 'sale.order', [['partner_id', 'in', allPartners]], ['name', 'display_name', 'partner_id', 'date_order', 'state', 'amount_total', 'invoice_status'], 2000);
+      addRelationship(out, 'res.partner', allPartners, 'partner_id', 'sale.order', orders.map((r: AnyRow) => Number(r.id)).filter(Boolean), 'Sales order terkait contact.');
+    }
+    if (includes.projects) {
+      const tasks = await tryExportSheet(conn, uid, out, 'project.task', [['partner_id', 'in', allPartners]], ['name', 'display_name', 'project_id', 'partner_id', 'stage_id', 'date_deadline', 'user_ids'], 2000);
+      addRelationship(out, 'res.partner', allPartners, 'partner_id', 'project.task', tasks.map((r: AnyRow) => Number(r.id)).filter(Boolean), 'Task terkait contact.');
+    }
+    addRelationship(out, 'res.partner', ids, 'parent_id/child_ids', 'res.partner', children.map((r: AnyRow) => Number(r.id)).filter(Boolean), 'Alamat/kontak anak dari partner utama.');
+    addRelationship(out, 'res.partner', allPartners, 'category_id', 'res.partner.category', tagIds, 'Tag/kategori partner.');
+    summary.child_contacts = children.length; summary.tags = tagIds.length;
+  } else if (bundle === 'product') {
+    const templates = await tryExportSheet(conn, uid, out, 'product.template', [['id', 'in', ids]], ['name', 'display_name', 'default_code', 'barcode', 'list_price', 'standard_price', 'categ_id', 'public_categ_ids', 'uom_id', 'uom_po_id', 'sale_ok', 'purchase_ok', 'website_published', 'description_sale', 'active']);
+    const variants = await tryExportSheet(conn, uid, out, 'product.product', [['product_tmpl_id', 'in', ids]], ['name', 'display_name', 'product_tmpl_id', 'default_code', 'barcode', 'lst_price', 'standard_price', 'active'], 5000);
+    await tryExportSheet(conn, uid, out, 'product.supplierinfo', [['product_tmpl_id', 'in', ids]], ['partner_id', 'product_tmpl_id', 'product_id', 'price', 'min_qty', 'delay', 'currency_id'], 5000);
+    const categIds = collectIds(templates, ['categ_id']);
+    const publicCategIds = collectIds(templates, ['public_categ_ids']);
+    const uomIds = uniqNums([...collectIds(templates, ['uom_id', 'uom_po_id'])]);
+    if (categIds.length) await tryExportSheet(conn, uid, out, 'product.category', [['id', 'in', categIds]], ['name', 'display_name', 'parent_id', 'complete_name']);
+    if (publicCategIds.length) await tryExportSheet(conn, uid, out, 'product.public.category', [['id', 'in', publicCategIds]], ['name', 'display_name', 'parent_id']);
+    if (uomIds.length) await tryExportSheet(conn, uid, out, 'uom.uom', [['id', 'in', uomIds]], ['name', 'display_name', 'category_id', 'uom_type', 'factor']);
+    addRelationship(out, 'product.template', ids, 'product_tmpl_id', 'product.product', variants.map((r: AnyRow) => Number(r.id)).filter(Boolean), 'Variant produk.');
+    addRelationship(out, 'product.template', ids, 'categ_id/public_categ_ids', 'product.category/product.public.category', categIds.concat(publicCategIds), 'Kategori teknis dan website.');
+    summary.variants = variants.length; summary.categories = categIds.length + publicCategIds.length;
+  } else if (bundle === 'sales') {
+    const orders = await tryExportSheet(conn, uid, out, 'sale.order', [['id', 'in', ids]], ['name', 'display_name', 'partner_id', 'date_order', 'state', 'amount_total', 'invoice_status', 'user_id', 'team_id', 'validity_date']);
+    const lines = await tryExportSheet(conn, uid, out, 'sale.order.line', [['order_id', 'in', ids]], ['order_id', 'product_id', 'product_template_id', 'name', 'product_uom_qty', 'price_unit', 'discount', 'price_subtotal'], 5000);
+    const partnerIds = collectIds(orders, ['partner_id']);
+    const userIds = collectIds(orders, ['user_id']);
+    const productIds = collectIds(lines, ['product_id']);
+    const productTemplateIds = collectIds(lines, ['product_template_id']);
+    if (partnerIds.length) await tryExportSheet(conn, uid, out, 'res.partner', [['id', 'in', partnerIds]], ['name', 'display_name', 'email', 'phone', 'mobile', 'street', 'city', 'customer_rank', 'supplier_rank']);
+    if (userIds.length) await tryExportSheet(conn, uid, out, 'res.users', [['id', 'in', userIds]], ['name', 'login', 'partner_id', 'active']);
+    if (productIds.length) await tryExportSheet(conn, uid, out, 'product.product', [['id', 'in', productIds]], ['name', 'display_name', 'product_tmpl_id', 'default_code', 'barcode']);
+    if (productTemplateIds.length) await tryExportSheet(conn, uid, out, 'product.template', [['id', 'in', productTemplateIds]], ['name', 'display_name', 'default_code', 'barcode', 'list_price', 'categ_id']);
+    addRelationship(out, 'sale.order', ids, 'order_id', 'sale.order.line', lines.map((r: AnyRow) => Number(r.id)).filter(Boolean), 'Order line.');
+    summary.lines = lines.length; summary.partners = partnerIds.length; summary.products = productIds.length + productTemplateIds.length;
+  } else if (bundle === 'knowledge') {
+    const articles = await tryExportSheet(conn, uid, out, 'knowledge.article', [['id', 'in', ids]], ['name', 'display_name', 'parent_id', 'body', 'body_html', 'article_member_ids', 'create_date', 'write_date']);
+    const children = await tryExportSheetAs(conn, uid, out, 'knowledge.article.children', 'knowledge.article', [['parent_id', 'in', ids]], ['name', 'display_name', 'parent_id', 'body', 'body_html', 'create_date', 'write_date'], 2000);
+    if (out['knowledge.article.children']) out['knowledge.article.children'] = out['knowledge.article.children'].map(r => ({ ...r, _model: 'knowledge.article' }));
+    const parentIds = collectIds(articles, ['parent_id']);
+    if (parentIds.length) await tryExportSheetAs(conn, uid, out, 'knowledge.article.parents', 'knowledge.article', [['id', 'in', parentIds]], ['name', 'display_name', 'parent_id']);
+    if (out['knowledge.article.parents']) out['knowledge.article.parents'] = out['knowledge.article.parents'].map(r => ({ ...r, _model: 'knowledge.article' }));
+    addRelationship(out, 'knowledge.article', ids, 'parent_id/children', 'knowledge.article', parentIds.concat(children.map((r: AnyRow) => Number(r.id)).filter(Boolean)), 'Parent dan child article.');
+    summary.children = children.length; summary.parents = parentIds.length;
+  } else {
+    await tryExportSheet(conn, uid, out, primaryModel, [['id', 'in', ids]], Array.isArray(body.fields) ? body.fields : ['name', 'display_name', 'create_date', 'write_date']);
+  }
+
+  summary.sheets = Object.keys(out).length;
+  addBundleReadme(out, bundle, primaryModel, ids, summary);
+  return { ok: true, bundle, primary_model: primaryModel, sheets: out, summary };
+}
+
 async function handleImportBatch(conn: Conn, body: AnyRow) {
   const uid = await login(conn);
   const rows: AnyRow[] = Array.isArray(body.rows) ? body.rows : [];
@@ -436,7 +598,7 @@ export async function GET() {
   return json({
     ok: true,
     app: 'Studio2 v10 Vercel-only Odoo Data Command Studio',
-    actions: ['test', 'schema', 'record_scan', 'export_records', 'export_project', 'import_batch', 'name_search'],
+    actions: ['test', 'schema', 'record_scan', 'export_records', 'export_bundle', 'export_project', 'import_batch', 'name_search'],
     note: 'Designed for short serverless calls. Browser handles XLSX preview/editor/batching.'
   });
 }
@@ -453,6 +615,7 @@ export async function POST(req: NextRequest) {
     else if (action === 'schema') result = await handleSchema(conn, body);
     else if (action === 'record_scan') result = await handleRecordScan(conn, body);
     else if (action === 'export_records') result = await handleExportRecords(conn, body);
+    else if (action === 'export_bundle') result = await handleExportBundle(conn, body);
     else if (action === 'export_project') result = await handleExportProject(conn, body);
     else if (action === 'import_batch') result = await handleImportBatch(conn, body);
     else if (action === 'name_search') result = await handleNameSearch(conn, body);

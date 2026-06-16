@@ -14,10 +14,12 @@ type SheetState = { name: string; model: string; rows: Row[]; columns: string[];
 type Issue = { level: 'error' | 'warn' | 'ok'; title: string; detail?: string };
 type LogItem = { time: string; level: 'info' | 'ok' | 'warn' | 'error'; message: string; detail?: any };
 type ModelPreset = { key: string; label: string; model: string; kind: EditorKind; description: string; fields: string; risk: 'safe' | 'careful' | 'advanced'; icon: string };
+type ExportMode = 'single' | 'bundle';
+type BundlePreset = { key: string; label: string; primaryModel: string; kind: EditorKind; description: string; fields: string; icon: string; includes?: Array<{ key: string; label: string; default?: boolean }> };
 
-const STORAGE_KEY = 'studio2_v10_settings';
+const STORAGE_KEY = 'studio2_v10_2_settings';
 const SAFE_LIMIT = 32000;
-const HELPER_SHEETS = new Set(['readme', 'readme_import', 'dashboard', 'validation_report', 'prompt', 'ai_memory_index', 'task_database', 'relationship_map', 'chatter_project', 'chatter_tasks', 'task_hierarchy', 'logs']);
+const HELPER_SHEETS = new Set(['readme', 'readme_import', 'dashboard', 'validation_report', 'task_database', 'relationship_map', 'readme_export', 'README_EXPORT'.toLowerCase(), 'chatter_project', 'chatter_tasks', 'task_hierarchy', 'logs']);
 const META_COLUMNS = new Set(['_model', '__action', '_external_id', 'external_id', 'id', 'x_studio2_odoo_id', '__rownum__', '_studio2_truncated_fields', '_studio2_note', '_studio2_error']);
 const defaultConn: Conn = { url: '', db: '', username: '', password: '' };
 
@@ -26,10 +28,19 @@ const MODEL_PRESETS: ModelPreset[] = [
   { key: 'products', label: 'Products', model: 'product.template', kind: 'product', description: 'Produk, harga, barcode, kategori, vendor, foto URL, dan publish.', fields: 'name,default_code,barcode,list_price,standard_price,categ_id,public_categ_ids,sale_ok,purchase_ok,website_published,description_sale,image_1920', risk: 'careful', icon: '◈' },
   { key: 'projects', label: 'Projects', model: 'project.project', kind: 'project', description: 'Project utama: Ground Zero, Soraya Kitchen, Pilot, Ekspansi.', fields: 'name,display_name,partner_id,user_id,active,date_start,date,description,privacy_visibility,stage_id', risk: 'safe', icon: '▦' },
   { key: 'tasks', label: 'Tasks', model: 'project.task', kind: 'project', description: 'Task, subtask, parent, stage, deadline, PIC, hierarchy.', fields: 'name,display_name,project_id,parent_id,stage_id,user_ids,partner_id,date_deadline,priority,sequence,description', risk: 'careful', icon: '☷' },
-  { key: 'knowledge', label: 'Knowledge', model: 'knowledge.article', kind: 'knowledge', description: 'SOP, konteks AI, rujukan project, dan artikel Knowledge.', fields: 'name,display_name,parent_id,body,body_html,create_date,write_date', risk: 'advanced', icon: '✦' },
+  { key: 'knowledge', label: 'Knowledge', model: 'knowledge.article', kind: 'knowledge', description: 'SOP, dokumentasi project, rujukan operasional, dan artikel Knowledge.', fields: 'name,display_name,parent_id,body,body_html,create_date,write_date', risk: 'advanced', icon: '✦' },
   { key: 'sales', label: 'Sales', model: 'sale.order', kind: 'sales', description: 'Sales order, customer, state, invoice, total, dan tanggal.', fields: 'name,partner_id,date_order,state,invoice_status,amount_untaxed,amount_tax,amount_total,validity_date,note', risk: 'advanced', icon: '₿' },
   { key: 'categories', label: 'Categories', model: 'product.category', kind: 'product', description: 'Kategori teknis internal produk Lokalmart.', fields: 'name,display_name,parent_id,complete_name,property_cost_method,property_valuation', risk: 'safe', icon: '◇' },
   { key: 'web_categories', label: 'Web Categories', model: 'product.public.category', kind: 'product', description: 'Kategori katalog website / ecommerce.', fields: 'name,display_name,parent_id,sequence,website_id', risk: 'safe', icon: '✧' }
+];
+
+
+const BUNDLE_PRESETS: BundlePreset[] = [
+  { key: 'project', label: 'Project Bundle', primaryModel: 'project.project', kind: 'project', icon: '▦', description: 'Project utama beserta task, subtask, milestone, update, stage, partner, dan responsible user.', fields: 'name,display_name,partner_id,user_id,date_start,date,description,privacy_visibility,stage_id,active' },
+  { key: 'contact', label: 'Contact Bundle', primaryModel: 'res.partner', kind: 'contact', icon: '◎', description: 'Contact/customer/supplier beserta child address, tag, dan relasi bisnis opsional.', fields: 'name,display_name,email,phone,mobile,street,street2,city,state_id,country_id,customer_rank,supplier_rank,is_company,category_id,comment', includes: [{ key: 'sales', label: 'Ikutkan sales order terkait' }, { key: 'projects', label: 'Ikutkan task/project terkait' }] },
+  { key: 'product', label: 'Product Bundle', primaryModel: 'product.template', kind: 'product', icon: '◈', description: 'Produk beserta varian, vendor/supplierinfo, kategori teknis, kategori website, dan satuan.', fields: 'name,display_name,default_code,barcode,list_price,standard_price,categ_id,public_categ_ids,uom_id,uom_po_id,sale_ok,purchase_ok,website_published,description_sale,active' },
+  { key: 'sales', label: 'Sales Bundle', primaryModel: 'sale.order', kind: 'sales', icon: '₿', description: 'Sales order beserta order line, customer, product, dan user sales.', fields: 'name,display_name,partner_id,date_order,state,amount_total,invoice_status,user_id,validity_date,note' },
+  { key: 'knowledge', label: 'Knowledge Bundle', primaryModel: 'knowledge.article', kind: 'knowledge', icon: '✦', description: 'Artikel Knowledge beserta child article dan parent reference jika ada.', fields: 'name,display_name,parent_id,body,body_html,create_date,write_date' }
 ];
 
 function now() { return new Date().toLocaleTimeString('id-ID', { hour12: false }); }
@@ -107,8 +118,11 @@ export default function HomePage() {
   const [editorMode, setEditorMode] = useState<'cards' | 'grid'>('cards');
   const [batchSize, setBatchSize] = useState(20);
   const [selectedModelKeys, setSelectedModelKeys] = useState<Record<string, boolean>>({ contacts: true });
-  const [activeModel, setActiveModel] = useState('res.partner');
-  const [exportFields, setExportFields] = useState(MODEL_PRESETS[0].fields);
+  const [exportMode, setExportMode] = useState<ExportMode>('bundle');
+  const [activeBundleKey, setActiveBundleKey] = useState('project');
+  const [bundleIncludes, setBundleIncludes] = useState<Record<string, boolean>>({});
+  const [activeModel, setActiveModel] = useState('project.project');
+  const [exportFields, setExportFields] = useState(BUNDLE_PRESETS[0].fields);
   const [customModel, setCustomModel] = useState('');
   const [customFields, setCustomFields] = useState('name,display_name,create_date,write_date');
   const [domain, setDomain] = useState('[]');
@@ -249,6 +263,16 @@ export default function HomePage() {
     setExportFields(preset.fields);
     setScanRecords([]); setSelectedIds({}); setScanOffset(0); setScanCount(0);
   }
+  function chooseBundle(bundle: BundlePreset) {
+    setExportMode('bundle');
+    setActiveBundleKey(bundle.key);
+    setActiveModel(bundle.primaryModel);
+    setExportFields(bundle.fields);
+    const defaults: Record<string, boolean> = {};
+    (bundle.includes || []).forEach(item => defaults[item.key] = Boolean(item.default));
+    setBundleIncludes(defaults);
+    setScanRecords([]); setSelectedIds({}); setScanOffset(0); setScanCount(0);
+  }
   async function scanModel(reset = true) {
     setBusy(true);
     try {
@@ -282,6 +306,22 @@ export default function HomePage() {
     } catch (e: any) { addLog('error', `Export gagal: ${e.message}`); }
     finally { setBusy(false); }
   }
+  async function exportSelectedBundle() {
+    const ids = Object.entries(selectedIds).filter(([, v]) => v).map(([id]) => Number(id));
+    if (!ids.length) { addLog('warn', 'Belum ada record utama dipilih untuk Smart Bundle.'); return; }
+    setBusy(true);
+    try {
+      const data = await callOdoo({ action: 'export_bundle', bundle: activeBundle.key, primary_model: activeBundle.primaryModel, ids, includes: bundleIncludes, fields: parseCsvFields(exportFields) });
+      const nextSheets = Object.entries(data.sheets || {}).map(([name, rows]) => rowsToSheetState(name, rows as Row[]));
+      setSheets(nextSheets);
+      setActiveSheetIndex(0);
+      setMission('review');
+      setImportStep('editor');
+      setExportStep('preview');
+      addLog('ok', `${activeBundle.label}: ${ids.length} record utama menghasilkan ${nextSheets.length} sheet.`, data.summary);
+    } catch (e: any) { addLog('error', `Smart Bundle gagal: ${e.message}`); }
+    finally { setBusy(false); }
+  }
   async function exportProject() {
     const id = prompt('Masukkan ID project Odoo, contoh: 73');
     if (!id) return;
@@ -298,6 +338,7 @@ export default function HomePage() {
   const selectedRecordCount = Object.values(selectedIds).filter(Boolean).length;
   const selectedImportCount = Object.values(selectedRows).filter(Boolean).length;
   const activePreset = MODEL_PRESETS.find(p => p.model === activeModel);
+  const activeBundle = BUNDLE_PRESETS.find(b => b.key === activeBundleKey) || BUNDLE_PRESETS[0];
 
   return (
     <main className="min-h-screen pb-24 text-white md:pb-8">
@@ -308,7 +349,7 @@ export default function HomePage() {
         {mission === 'home' && <HomeMission connectionReady={connectionReady} setMission={setMission} sheets={sheets} logs={logs} scanCount={scanCount} />}
         {mission === 'settings' && <SettingsScreen conn={conn} setConn={setConn} testConnection={testConnection} busy={busy} connectionReady={connectionReady} />}
         {mission === 'import' && <ImportMission step={importStep} setStep={setImportStep} busy={busy} sheets={sheets} activeSheet={activeSheet} activeSheetIndex={activeSheetIndex} setActiveSheetIndex={setActiveSheetIndex} handleFile={handleFile} issues={issues} selectedImportCount={selectedImportCount} loadSchema={() => loadSchema()} setMission={setMission} />}
-        {mission === 'export' && <ExportMission step={exportStep} setStep={setExportStep} busy={busy} presets={MODEL_PRESETS} selectedModelKeys={selectedModelKeys} togglePreset={togglePreset} choosePreset={choosePreset} activeModel={activeModel} activePreset={activePreset} exportFields={exportFields} setExportFields={setExportFields} domain={domain} setDomain={setDomain} customModel={customModel} setCustomModel={setCustomModel} customFields={customFields} setCustomFields={setCustomFields} scanModel={() => scanModel(true)} loadMore={() => scanModel(false)} exportSelectedRecords={exportSelectedRecords} exportProject={exportProject} scanRecords={scanRecords} scanCount={scanCount} scanOffset={scanOffset} selectedIds={selectedIds} setSelectedIds={setSelectedIds} selectedRecordCount={selectedRecordCount} />}
+        {mission === 'export' && <ExportMission step={exportStep} setStep={setExportStep} busy={busy} presets={MODEL_PRESETS} bundles={BUNDLE_PRESETS} exportMode={exportMode} setExportMode={setExportMode} activeBundle={activeBundle} activeBundleKey={activeBundleKey} chooseBundle={chooseBundle} bundleIncludes={bundleIncludes} setBundleIncludes={setBundleIncludes} selectedModelKeys={selectedModelKeys} togglePreset={togglePreset} choosePreset={choosePreset} activeModel={activeModel} activePreset={activePreset} exportFields={exportFields} setExportFields={setExportFields} domain={domain} setDomain={setDomain} customModel={customModel} setCustomModel={setCustomModel} customFields={customFields} setCustomFields={setCustomFields} scanModel={() => scanModel(true)} loadMore={() => scanModel(false)} exportSelectedRecords={exportSelectedRecords} exportSelectedBundle={exportSelectedBundle} exportProject={exportProject} scanRecords={scanRecords} scanCount={scanCount} scanOffset={scanOffset} selectedIds={selectedIds} setSelectedIds={setSelectedIds} selectedRecordCount={selectedRecordCount} />}
         {mission === 'review' && <ReviewMission activeSheet={activeSheet} activeSheetIndex={activeSheetIndex} sheets={sheets} setActiveSheetIndex={setActiveSheetIndex} issues={issues} columns={visibleColumns} schema={schemaModel === activeSheet?.model ? schema : null} editorMode={editorMode} setEditorMode={setEditorMode} selectedRows={selectedRows} setSelectedRows={setSelectedRows} updateCell={updateCell} addColumn={addColumn} addRow={addRow} loadSchema={() => loadSchema()} download={() => downloadWorkbook('studio2_edited.xlsx')} importActiveSheet={importActiveSheet} batchSize={batchSize} setBatchSize={setBatchSize} busy={busy} />}
       </div>
       <BottomNav mission={mission} setMission={setMission} />
@@ -321,7 +362,7 @@ function TopBar({ mission, setMission, connectionReady, busy, openLogs }: { miss
   return <header className="top-shell">
     <button className="brand" onClick={() => setMission('home')}>
       <span className="brand-mark">LM</span>
-      <span><b>Lokalmart Studio</b><small>Data Command for Odoo</small></span>
+      <span><b>Lokalmart Studio</b><small>Odoo Data Command</small></span>
     </button>
     <div className="top-actions">
       <span className={connectionReady ? 'status ok' : 'status warn'}>{connectionReady ? 'Odoo ready' : 'Setup'}</span>
@@ -335,7 +376,7 @@ function TopBar({ mission, setMission, connectionReady, busy, openLogs }: { miss
 function HomeMission({ connectionReady, setMission, sheets, logs, scanCount }: { connectionReady: boolean; setMission: (m: Mission) => void; sheets: SheetState[]; logs: LogItem[]; scanCount: number }) {
   return <section className="mission-home">
     <div className="hero-copy">
-      <span className="eyebrow">Studio2 v10 · Mission UX Rebuild</span>
+      <span className="eyebrow">Studio2 v10.1 · Mission UX Rebuild</span>
       <h1>Kontrol data Odoo tanpa tenggelam di spreadsheet.</h1>
       <p>Mulai dari niat kerja: import data ke Odoo, export record dari Odoo, review hasil, lalu eksekusi aman per batch.</p>
       <div className="hero-stats">
@@ -396,25 +437,38 @@ function DatasetOverview({ sheets, activeSheetIndex, setActiveSheetIndex }: { sh
 }
 function IssueList({ issues }: { issues: Issue[] }) { return <div className="issue-list">{issues.map((issue, idx) => <div key={idx} className={`issue ${issue.level}`}><b>{issue.title}</b>{issue.detail && <small>{issue.detail}</small>}</div>)}</div>; }
 
-function ExportMission(props: { step: ExportStep; setStep: (s: ExportStep) => void; busy: boolean; presets: ModelPreset[]; selectedModelKeys: Record<string, boolean>; togglePreset: (p: ModelPreset) => void; choosePreset: (p: ModelPreset) => void; activeModel: string; activePreset?: ModelPreset; exportFields: string; setExportFields: (v: string) => void; domain: string; setDomain: (v: string) => void; customModel: string; setCustomModel: (v: string) => void; customFields: string; setCustomFields: (v: string) => void; scanModel: () => void; loadMore: () => void; exportSelectedRecords: () => void; exportProject: () => void; scanRecords: Row[]; scanCount: number; scanOffset: number; selectedIds: Record<number, boolean>; setSelectedIds: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; selectedRecordCount: number }) {
+function ExportMission(props: { step: ExportStep; setStep: (s: ExportStep) => void; busy: boolean; presets: ModelPreset[]; bundles: BundlePreset[]; exportMode: ExportMode; setExportMode: (m: ExportMode) => void; activeBundle: BundlePreset; activeBundleKey: string; chooseBundle: (b: BundlePreset) => void; bundleIncludes: Record<string, boolean>; setBundleIncludes: React.Dispatch<React.SetStateAction<Record<string, boolean>>>; selectedModelKeys: Record<string, boolean>; togglePreset: (p: ModelPreset) => void; choosePreset: (p: ModelPreset) => void; activeModel: string; activePreset?: ModelPreset; exportFields: string; setExportFields: (v: string) => void; domain: string; setDomain: (v: string) => void; customModel: string; setCustomModel: (v: string) => void; customFields: string; setCustomFields: (v: string) => void; scanModel: () => void; loadMore: () => void; exportSelectedRecords: () => void; exportSelectedBundle: () => void; exportProject: () => void; scanRecords: Row[]; scanCount: number; scanOffset: number; selectedIds: Record<number, boolean>; setSelectedIds: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; selectedRecordCount: number }) {
   const p = props;
+  const smart = p.exportMode === 'bundle';
+  const activeTitle = smart ? p.activeBundle.label : (p.activePreset?.label || 'Custom Model');
+  const activeIcon = smart ? p.activeBundle.icon : (p.activePreset?.icon || '◇');
+  const activeDesc = smart ? `${p.activeBundle.primaryModel} · relasi otomatis` : `${p.activeModel} · ${parseCsvFields(p.exportFields).length} fields`;
   return <section className="screen-stack">
-    <SectionTitle overline="Export Mission" title="Pilih data yang ingin dibawa keluar" desc="Model utama tampil sebagai checklist mission card. Technical model ada di Advanced supaya layar tetap bersih." />
-    <StepRail steps={['Pilih Data', 'Scan Record', 'Pilih Field', 'Preview']} active={['choose','records','fields','preview'].indexOf(p.step)} />
-    <div className="model-grid">{p.presets.map(preset => <button key={preset.key} className={p.activeModel === preset.model ? 'model-card active' : 'model-card'} onClick={() => p.choosePreset(preset)}><span className="check" onClick={(e) => { e.stopPropagation(); p.togglePreset(preset); }}>{p.selectedModelKeys[preset.key] ? '✓' : ''}</span><span className="model-icon">{preset.icon}</span><b>{preset.label}</b><small>{preset.description}</small><em>{preset.model}</em><i className={`risk ${preset.risk}`}>{preset.risk}</i></button>)}</div>
-    <details className="advanced"><summary>Advanced: custom model dan domain</summary><div className="advanced-grid"><Field label="Custom model" value={p.customModel} onChange={v => { p.setCustomModel(v); if (v) p.choosePreset({ key: 'custom', label: 'Custom', model: v, kind: 'dynamic', description: '', fields: p.customFields, risk: 'advanced', icon: '◇' }); }} placeholder="x_custom_model" /><Field label="Domain JSON" value={p.domain} onChange={p.setDomain} placeholder='[]' /><label className="field wide"><span>Fields</span><textarea value={p.exportFields} onChange={e => p.setExportFields(e.target.value)} /></label></div></details>
+    <SectionTitle overline="Export Mission" title="Pilih objek, bukan cuma tabel" desc="Single Model untuk export sederhana. Smart Bundle untuk membawa record utama beserta data Odoo yang menempel: task, line, kategori, vendor, child contact, dan referensi." />
+    <StepRail steps={['Pilih Objek', 'Scan Record', 'Pilih Record', 'Preview']} active={['choose','records','fields','preview'].indexOf(p.step)} />
+    <div className="mode-switch"><button className={p.exportMode === 'bundle' ? 'tab active' : 'tab'} onClick={() => { p.setExportMode('bundle'); p.chooseBundle(p.activeBundle); }}>Smart Bundle</button><button className={p.exportMode === 'single' ? 'tab active' : 'tab'} onClick={() => p.setExportMode('single')}>Single Model</button></div>
+
+    {smart ? <>
+      <div className="bundle-grid">{p.bundles.map(bundle => <button key={bundle.key} className={p.activeBundleKey === bundle.key ? 'bundle-card active' : 'bundle-card'} onClick={() => p.chooseBundle(bundle)}><span className="model-icon">{bundle.icon}</span><b>{bundle.label}</b><small>{bundle.description}</small><em>{bundle.primaryModel}</em></button>)}</div>
+      {!!p.activeBundle.includes?.length && <div className="focus-card compact-card"><b>Relasi opsional</b><small>Default bundle tetap ringan. Centang hanya jika memang perlu dibawa.</small><div className="include-list">{p.activeBundle.includes.map(item => <label key={item.key}><input type="checkbox" checked={Boolean(p.bundleIncludes[item.key])} onChange={e => p.setBundleIncludes(prev => ({ ...prev, [item.key]: e.target.checked }))} />{item.label}</label>)}</div></div>}
+    </> : <>
+      <div className="model-grid">{p.presets.map(preset => <button key={preset.key} className={p.activeModel === preset.model ? 'model-card active' : 'model-card'} onClick={() => p.choosePreset(preset)}><span className="check" onClick={(e) => { e.stopPropagation(); p.togglePreset(preset); }}>{p.selectedModelKeys[preset.key] ? '✓' : ''}</span><span className="model-icon">{preset.icon}</span><b>{preset.label}</b><small>{preset.description}</small><em>{preset.model}</em><i className={`risk ${preset.risk}`}>{preset.risk}</i></button>)}</div>
+    </>}
+
+    <details className="advanced"><summary>Advanced: custom model, domain, dan field</summary><div className="advanced-grid"><Field label="Custom model" value={p.customModel} onChange={v => { p.setCustomModel(v); if (v) { p.setExportMode('single'); p.choosePreset({ key: 'custom', label: 'Custom', model: v, kind: 'dynamic', description: '', fields: p.customFields, risk: 'advanced', icon: '◇' }); } }} placeholder="x_custom_model" /><Field label="Domain JSON" value={p.domain} onChange={p.setDomain} placeholder='[]' /><label className="field wide"><span>Fields untuk record utama</span><textarea value={p.exportFields} onChange={e => p.setExportFields(e.target.value)} /></label></div></details>
+
     <div className="focus-card">
-      <div className="object-head"><span className="object-icon">{p.activePreset?.icon || '◇'}</span><div><b>{p.activePreset?.label || 'Custom Model'}</b><small>{p.activeModel} · {parseCsvFields(p.exportFields).length} default fields</small></div><span className="chip">Target aktif</span></div>
+      <div className="object-head"><span className="object-icon">{activeIcon}</span><div><b>{activeTitle}</b><small>{activeDesc}</small></div><span className="chip">{smart ? 'Bundle aktif' : 'Model aktif'}</span></div>
       <div className="field-pills">{parseCsvFields(p.exportFields).slice(0, 12).map(f => <span key={f}>{f}</span>)}{parseCsvFields(p.exportFields).length > 12 && <span>+{parseCsvFields(p.exportFields).length - 12}</span>}</div>
-      <div className="action-row"><button className="secondary-action" onClick={p.exportProject}>Export project by ID</button><button className="primary-action" onClick={p.scanModel} disabled={p.busy}>{p.busy ? 'Scanning…' : 'Scan record'}</button></div>
+      <div className="action-row"><button className="secondary-action" onClick={p.exportProject}>Project by ID lama</button><button className="primary-action" onClick={p.scanModel} disabled={p.busy}>{p.busy ? 'Scanning…' : smart ? 'Scan record utama' : 'Scan record'}</button></div>
     </div>
-    {!!p.scanRecords.length && <RecordPicker records={p.scanRecords} count={p.scanCount} offset={p.scanOffset} selectedIds={p.selectedIds} setSelectedIds={p.setSelectedIds} loadMore={p.loadMore} exportSelected={p.exportSelectedRecords} selectedRecordCount={p.selectedRecordCount} />}
+    {!!p.scanRecords.length && <RecordPicker records={p.scanRecords} count={p.scanCount} offset={p.scanOffset} selectedIds={p.selectedIds} setSelectedIds={p.setSelectedIds} loadMore={p.loadMore} exportSelected={smart ? p.exportSelectedBundle : p.exportSelectedRecords} selectedRecordCount={p.selectedRecordCount} exportLabel={smart ? `Export ${p.activeBundle.label}` : 'Export record'} />}
   </section>;
 }
-function RecordPicker({ records, count, offset, selectedIds, setSelectedIds, loadMore, exportSelected, selectedRecordCount }: { records: Row[]; count: number; offset: number; selectedIds: Record<number, boolean>; setSelectedIds: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; loadMore: () => void; exportSelected: () => void; selectedRecordCount: number }) {
+function RecordPicker({ records, count, offset, selectedIds, setSelectedIds, loadMore, exportSelected, selectedRecordCount, exportLabel = 'Export record' }: { records: Row[]; count: number; offset: number; selectedIds: Record<number, boolean>; setSelectedIds: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; loadMore: () => void; exportSelected: () => void; selectedRecordCount: number; exportLabel?: string }) {
   const [q, setQ] = useState('');
   const visible = records.filter(r => JSON.stringify(r).toLowerCase().includes(q.toLowerCase()));
-  return <div className="record-zone"><div className="record-head"><div><b>{count} record ditemukan</b><small>{selectedRecordCount} dipilih · {offset} sudah dimuat</small></div><input value={q} onChange={e => setQ(e.target.value)} placeholder="Cari record…" /></div><div className="record-list">{visible.map(row => { const id = Number(row.id); const title = row.display_name || row.name || row.email || `Record ${id}`; return <label key={id} className={selectedIds[id] ? 'record-card selected' : 'record-card'}><input type="checkbox" checked={Boolean(selectedIds[id])} onChange={e => setSelectedIds(prev => ({ ...prev, [id]: e.target.checked }))} /><span><b>{compact(title, 60)}</b><small>ID {id} · {compact(row.email || row.phone || row.mobile || row.default_code || row.create_date || '', 80)}</small></span></label>; })}</div><div className="action-row sticky-actions"><button className="secondary-action" onClick={loadMore}>Muat lagi</button><button className="primary-action" onClick={exportSelected}>Export {selectedRecordCount || ''} record</button></div></div>;
+  return <div className="record-zone"><div className="record-head"><div><b>{count} record ditemukan</b><small>{selectedRecordCount} dipilih · {offset} sudah dimuat</small></div><input value={q} onChange={e => setQ(e.target.value)} placeholder="Cari record…" /></div><div className="record-list">{visible.map(row => { const id = Number(row.id); const title = row.display_name || row.name || row.email || `Record ${id}`; return <label key={id} className={selectedIds[id] ? 'record-card selected' : 'record-card'}><input type="checkbox" checked={Boolean(selectedIds[id])} onChange={e => setSelectedIds(prev => ({ ...prev, [id]: e.target.checked }))} /><span><b>{compact(title, 60)}</b><small>ID {id} · {compact(row.email || row.phone || row.mobile || row.default_code || row.create_date || '', 80)}</small></span></label>; })}</div><div className="action-row sticky-actions"><button className="secondary-action" onClick={loadMore}>Muat lagi</button><button className="primary-action" onClick={exportSelected}>{exportLabel} {selectedRecordCount || ''}</button></div></div>;
 }
 
 function ReviewMission(props: { activeSheet?: SheetState; activeSheetIndex: number; sheets: SheetState[]; setActiveSheetIndex: (i: number) => void; issues: Issue[]; columns: string[]; schema: Record<string, OdooField> | null; editorMode: 'cards' | 'grid'; setEditorMode: (m: 'cards' | 'grid') => void; selectedRows: Record<number, boolean>; setSelectedRows: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; updateCell: (rowIndex: number, column: string, value: any) => void; addColumn: () => void; addRow: () => void; loadSchema: () => void; download: () => void; importActiveSheet: () => void; batchSize: number; setBatchSize: (n: number) => void; busy: boolean }) {
