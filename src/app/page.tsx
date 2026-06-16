@@ -154,6 +154,107 @@ function kindTone(kind: EditorKind) {
   return map[kind];
 }
 
+
+type ModelPreset = {
+  key: string;
+  label: string;
+  model: string;
+  kind: EditorKind;
+  description: string;
+  fields: string;
+  tone: string;
+};
+
+const MODEL_PRESETS: ModelPreset[] = [
+  {
+    key: 'contacts',
+    label: 'Contacts',
+    model: 'res.partner',
+    kind: 'contact',
+    description: 'Customer, supplier, member, vendor, dan mitra Lokalmart.',
+    fields: 'name,display_name,email,phone,mobile,street,street2,city,state_id,country_id,customer_rank,supplier_rank,is_company,comment',
+    tone: 'violet'
+  },
+  {
+    key: 'products',
+    label: 'Products',
+    model: 'product.template',
+    kind: 'product',
+    description: 'Produk, harga, barcode, kategori, foto URL, dan data katalog.',
+    fields: 'name,default_code,barcode,list_price,standard_price,categ_id,public_categ_ids,sale_ok,purchase_ok,website_published,description_sale,image_1920',
+    tone: 'cyan'
+  },
+  {
+    key: 'projects',
+    label: 'Projects',
+    model: 'project.project',
+    kind: 'project',
+    description: 'Project utama seperti Ground Zero, Soraya Kitchen, dan Pilot.',
+    fields: 'name,display_name,partner_id,user_id,active,date_start,date,description,privacy_visibility,stage_id',
+    tone: 'amber'
+  },
+  {
+    key: 'tasks',
+    label: 'Tasks',
+    model: 'project.task',
+    kind: 'project',
+    description: 'Task, subtask, parent, stage, deadline, PIC, dan hierarchy.',
+    fields: 'name,display_name,project_id,parent_id,stage_id,user_ids,partner_id,date_deadline,priority,sequence,description',
+    tone: 'amber'
+  },
+  {
+    key: 'knowledge',
+    label: 'Knowledge',
+    model: 'knowledge.article',
+    kind: 'knowledge',
+    description: 'Artikel knowledge, SOP, konteks AI, dan rujukan project.',
+    fields: 'name,display_name,parent_id,body,body_html,create_date,write_date',
+    tone: 'fuchsia'
+  },
+  {
+    key: 'sales',
+    label: 'Sales',
+    model: 'sale.order',
+    kind: 'sales',
+    description: 'Sales order, customer, status invoice, total, dan tanggal order.',
+    fields: 'name,partner_id,date_order,state,invoice_status,amount_untaxed,amount_tax,amount_total,validity_date,note',
+    tone: 'emerald'
+  },
+  {
+    key: 'categories',
+    label: 'Categories',
+    model: 'product.category',
+    kind: 'product',
+    description: 'Kategori teknis internal produk Lokalmart.',
+    fields: 'name,display_name,parent_id,complete_name,property_cost_method,property_valuation',
+    tone: 'cyan'
+  },
+  {
+    key: 'website_categories',
+    label: 'Web Categories',
+    model: 'product.public.category',
+    kind: 'product',
+    description: 'Kategori katalog website/eCommerce untuk pelanggan.',
+    fields: 'name,display_name,parent_id,sequence,website_id',
+    tone: 'cyan'
+  }
+];
+
+function findPresetByModel(model: string) {
+  return MODEL_PRESETS.find(p => p.model === model);
+}
+
+function modelToneClasses(tone: string) {
+  const map: Record<string, string> = {
+    cyan: 'model-tone-cyan',
+    violet: 'model-tone-violet',
+    amber: 'model-tone-amber',
+    fuchsia: 'model-tone-fuchsia',
+    emerald: 'model-tone-emerald'
+  };
+  return map[tone] || 'model-tone-default';
+}
+
 export default function HomePage() {
   const [mode, setMode] = useState<'import' | 'export'>('import');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -293,7 +394,7 @@ export default function HomePage() {
     if (schema && schemaModel === activeSheet.model) {
       const unknown = activeSheet.columns.filter(c => !META_COLUMNS.has(c) && !c.endsWith('_external_id') && !c.endsWith('_external_ids') && !schema[c]);
       if (unknown.length) issues.push(`Kolom tidak dikenal di ${activeSheet.model}: ${unknown.slice(0, 30).join(', ')}${unknown.length > 30 ? '...' : ''}`);
-      const required = Object.entries(schema).filter(([, v]) => v.required && !v.readonly).map(([k]) => k);
+      const required = Object.entries(schema as Record<string, OdooField>).filter(([, v]) => v.required && !v.readonly).map(([k]) => k);
       const missing = required.filter(f => !activeSheet.columns.includes(f) && !activeSheet.columns.includes(`${f}_external_id`));
       if (missing.length) issues.push(`Field wajib belum ada di sheet: ${missing.slice(0, 20).join(', ')}`);
     }
@@ -434,18 +535,18 @@ export default function HomePage() {
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="badge badge-dark">Studio2 v9.1</span>
-                <span className="badge badge-cyan">Web3 UI</span>
+                <span className="badge badge-dark">Studio2 v9.2</span>
+                <span className="badge badge-cyan">Command UI</span>
                 <span className="badge badge-green">Vercel-safe batch</span>
                 <span className={connectionOk ? 'status-pill status-ok' : 'status-pill status-warn'}>
                   <span className="pulse-dot" />{connectionOk ? 'Odoo target ready' : 'Koneksi belum lengkap'}
                 </span>
               </div>
               <h1 className="mt-3 text-3xl font-black tracking-tight md:text-5xl">
-                Lokalmart <span className="text-gradient">Odoo Command Studio</span>
+                Lokalmart <span className="text-gradient">Command Studio</span>
               </h1>
               <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-300 md:text-base">
-                Import/export XLSX yang terasa seperti control room: upload, scan, pilih record, validasi schema, edit native per model, lalu kirim batch kecil ke Odoo.
+                Command center untuk operasi data Odoo: pilih mission, scan record, edit seperti native workspace, validasi schema, lalu jalankan import/export batch kecil yang aman untuk Vercel.
               </p>
             </div>
             <div className="flex flex-wrap gap-2 rounded-3xl border border-white/10 bg-white/5 p-2 backdrop-blur-xl">
@@ -627,10 +728,14 @@ function ExportPanel(props: {
   scan: () => void; loadMore: () => void; exportSelected: () => void; exportProject: () => void; scanCount: number; scanOffset: number; scanRecords: Row[];
   selectedIds: Record<number, boolean>; loadSchema: () => void; selectedCount: number;
 }) {
+  const activePreset = findPresetByModel(props.model);
+  const fieldCount = parseCsvFields(props.fields).length;
+
   if (props.compact) {
     return (
-      <div className="rail-card">
+      <div className="rail-card command-rail">
         <div className="rail-title">Export</div>
+        <div className="compact-model-badge" title={props.model}>{activePreset ? kindIcon(activePreset.kind) : '◇'}</div>
         <button className="rail-action" disabled={props.busy} onClick={props.scan} title="Scan ulang">⌕</button>
         <button className="rail-action" disabled={props.busy} onClick={props.loadSchema} title="Schema">⌘</button>
         <button className="rail-action" disabled={props.busy || props.scanRecords.length >= props.scanCount} onClick={props.loadMore} title="Load more">…</button>
@@ -642,34 +747,81 @@ function ExportPanel(props: {
   }
 
   return (
-    <div className="control-card">
-      <div className="flex items-center justify-between gap-3">
+    <div className="control-card command-control">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="eyebrow">Export pipeline</div>
-          <h2 className="text-xl font-black">Scan → Select → Export</h2>
+          <div className="eyebrow">Export command</div>
+          <h2 className="text-2xl font-black leading-tight">Pilih target data</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-300">Tidak perlu mengetik model. Pilih dari checklist, scan record, centang data, lalu export ke editor.</p>
         </div>
-        <div className="icon-tile">⇩</div>
+        <div className="icon-tile">⌕</div>
       </div>
-      <p className="mt-2 text-sm leading-6 text-slate-300">Pilih record dan field sebelum export agar XLSX tetap ramping, cepat, dan tidak menabrak limit teks Excel.</p>
-      <div className="mt-5 space-y-3">
-        <FloatingInput label="Model Odoo" value={props.model} onChange={props.setModel} placeholder="res.partner" />
-        <label className="field-shell">
-          <span>Fields export</span>
-          <textarea value={props.fields} onChange={e => props.setFields(e.target.value)} />
-        </label>
-        <FloatingInput label="Domain JSON" value={props.domain} onChange={props.setDomain} placeholder="[]" />
-        <div className="grid grid-cols-2 gap-2">
-          <button className="btn btn-neo" disabled={props.busy} onClick={props.scan}>Scan</button>
-          <button className="btn btn-ghost" disabled={props.busy} onClick={props.loadSchema}>Schema</button>
-          <button className="btn btn-ghost" disabled={props.busy || props.scanRecords.length >= props.scanCount} onClick={props.loadMore}>Load More</button>
-          <button className="btn btn-ghost" disabled={props.busy} onClick={props.exportProject}>Project</button>
-        </div>
-        <div className="stat-grid">
-          <Metric label="Scanned" value={`${props.scanRecords.length}/${props.scanCount}`} />
-          <Metric label="Selected" value={String(props.selectedCount)} />
-        </div>
-        <button className="btn btn-neo w-full" disabled={props.busy || props.selectedCount === 0} onClick={props.exportSelected}>Export Record Terpilih</button>
+
+      <div className="mt-5 grid gap-2">
+        {MODEL_PRESETS.map(preset => {
+          const active = props.model === preset.model;
+          return (
+            <button
+              key={preset.key}
+              type="button"
+              onClick={() => {
+                props.setModel(preset.model);
+                props.setFields(preset.fields);
+              }}
+              className={`model-check-card ${modelToneClasses(preset.tone)} ${active ? 'model-check-active' : ''}`}
+            >
+              <span className={`check-ring ${active ? 'check-ring-on' : ''}`}>{active ? '✓' : ''}</span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2 text-sm font-black text-white">
+                  <span>{kindIcon(preset.kind)}</span>
+                  <span className="truncate">{preset.label}</span>
+                </span>
+                <span className="mt-1 block truncate text-xs text-slate-400">{preset.model}</span>
+                <span className="mt-1 block text-left text-[11px] leading-4 text-slate-300/85">{preset.description}</span>
+              </span>
+            </button>
+          );
+        })}
       </div>
+
+      <div className="mt-4 rounded-3xl border border-white/10 bg-white/[.045] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[10px] font-black uppercase tracking-[.2em] text-cyan-200/80">Current mission</div>
+            <div className="mt-1 truncate text-sm font-black text-white">{activePreset?.label || 'Custom model'} · {props.model || 'belum dipilih'}</div>
+          </div>
+          <span className="badge badge-dark">{fieldCount} fields</span>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {parseCsvFields(props.fields).slice(0, 12).map(field => <span className="field-pill" key={field}>{field}</span>)}
+          {fieldCount > 12 && <span className="field-pill field-pill-more">+{fieldCount - 12}</span>}
+        </div>
+      </div>
+
+      <details className="advanced-drawer mt-3">
+        <summary>Advanced: custom model, field list, domain</summary>
+        <div className="mt-3 space-y-3">
+          <FloatingInput label="Custom model" value={props.model} onChange={props.setModel} placeholder="contoh: res.partner" />
+          <label className="field-shell">
+            <span>Fields export</span>
+            <textarea value={props.fields} onChange={e => props.setFields(e.target.value)} />
+          </label>
+          <FloatingInput label="Domain JSON" value={props.domain} onChange={props.setDomain} placeholder="[]" />
+        </div>
+      </details>
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button className="btn btn-neo" disabled={props.busy || !props.model} onClick={props.scan}>Scan Record</button>
+        <button className="btn btn-ghost" disabled={props.busy || !props.model} onClick={props.loadSchema}>Schema</button>
+        <button className="btn btn-ghost" disabled={props.busy || props.scanRecords.length >= props.scanCount} onClick={props.loadMore}>Load More</button>
+        <button className="btn btn-ghost" disabled={props.busy} onClick={props.exportProject}>Project Export</button>
+      </div>
+
+      <div className="stat-grid mt-3">
+        <Metric label="Scanned" value={`${props.scanRecords.length}/${props.scanCount}`} />
+        <Metric label="Selected" value={String(props.selectedCount)} />
+      </div>
+      <button className="btn btn-neo mt-3 w-full" disabled={props.busy || props.selectedCount === 0} onClick={props.exportSelected}>Export Record Terpilih</button>
     </div>
   );
 }
@@ -788,52 +940,94 @@ function CellInput({ value, field, onChange }: { value: any; field?: OdooField; 
 }
 
 function RecordPicker({ records, selectedIds, setSelectedIds, scanCount }: { records: Row[]; selectedIds: Record<number, boolean>; setSelectedIds: (x: Record<number, boolean>) => void; scanCount: number }) {
-  const cols = makeColumns(records).filter(c => c !== 'id').slice(0, 10);
+  const [query, setQuery] = useState('');
+  const cols = makeColumns(records).filter(c => c !== 'id').slice(0, 8);
+  const selectedCount = Object.values(selectedIds).filter(Boolean).length;
+  const filtered = records.filter(row => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return String(row.display_name || row.name || row.email || row.phone || row.id || '').toLowerCase().includes(q)
+      || cols.some(c => String(row[c] ?? '').toLowerCase().includes(q));
+  });
+  const selectVisible = () => {
+    const next = { ...selectedIds };
+    filtered.forEach(r => next[Number(r.id)] = true);
+    setSelectedIds(next);
+  };
+  const clearVisible = () => {
+    const next = { ...selectedIds };
+    filtered.forEach(r => delete next[Number(r.id)]);
+    setSelectedIds(next);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="rounded-[30px] border border-white/10 bg-gradient-to-br from-sky-400/20 to-violet-400/10 p-4">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
+      <div className="command-hero">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
             <div className="flex flex-wrap gap-2">
-              <span className="badge badge-dark">⌕ Record Picker</span>
+              <span className="badge badge-dark">⌕ Record Command Deck</span>
               <span className="badge badge-cyan">{records.length}/{scanCount}</span>
+              <span className="badge badge-green">{selectedCount} selected</span>
             </div>
-            <h2 className="mt-3 text-2xl font-black text-white">Pilih record yang akan diexport</h2>
-            <p className="mt-1 text-sm text-slate-300">Export hanya record yang dicentang supaya XLSX ramping dan aman untuk Vercel.</p>
+            <h2 className="mt-3 text-3xl font-black tracking-tight text-white">Pilih record seperti memilih asset</h2>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-300">Tidak ada tabel mentah di tahap keputusan. Scan record tampil sebagai kartu checklist; detail spreadsheet baru muncul setelah data masuk editor.</p>
           </div>
-          <Metric label="Selected" value={String(Object.values(selectedIds).filter(Boolean).length)} />
+          <div className="grid min-w-[230px] grid-cols-2 gap-2">
+            <Metric label="Visible" value={String(filtered.length)} />
+            <Metric label="Selected" value={String(selectedCount)} />
+          </div>
         </div>
       </div>
+
       {!records.length ? (
-        <div className="empty-state">
+        <div className="empty-state min-h-[56vh]">
           <div className="text-6xl">⌕</div>
           <h2 className="mt-4 text-2xl font-black">Belum ada record discan</h2>
-          <p className="mt-2 text-slate-300">Isi model Odoo di panel kiri, klik Scan, lalu pilih record yang ingin masuk XLSX.</p>
+          <p className="mt-2 max-w-xl text-slate-300">Pilih model dari checklist di panel kiri, klik Scan Record, lalu centang record yang ingin masuk XLSX.</p>
         </div>
       ) : (
-        <div className="table-shell studio-scroll">
-          <table className="min-w-full text-sm">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th className="table-head w-12"><input type="checkbox" onChange={e => {
-                  const next: Record<number, boolean> = {};
-                  if (e.target.checked) records.forEach(r => next[Number(r.id)] = true);
-                  setSelectedIds(next);
-                }} /></th>
-                <th className="table-head text-left">ID</th>
-                {cols.map(c => <th key={c} className="table-head text-left">{c}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {records.map(row => (
-                <tr key={row.id} className={selectedIds[Number(row.id)] ? 'row-selected' : 'row-normal'}>
-                  <td className="table-cell text-center"><input type="checkbox" checked={Boolean(selectedIds[Number(row.id)])} onChange={e => setSelectedIds({ ...selectedIds, [Number(row.id)]: e.target.checked })} /></td>
-                  <td className="table-cell font-bold text-cyan-200">{row.id}</td>
-                  {cols.map(c => <td key={c} className="table-cell max-w-sm truncate">{String(row[c] ?? '')}</td>)}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-3">
+          <div className="record-toolbar">
+            <label className="search-shell">
+              <span>Search</span>
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Cari nama, email, telepon, ID, atau teks record..." />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-ghost" onClick={selectVisible}>Select visible</button>
+              <button className="btn btn-ghost" onClick={clearVisible}>Clear visible</button>
+              <button className="btn btn-ghost" onClick={() => setSelectedIds({})}>Clear all</button>
+            </div>
+          </div>
+
+          <div className="record-grid studio-scroll">
+            {filtered.slice(0, 240).map(row => {
+              const id = Number(row.id);
+              const selected = Boolean(selectedIds[id]);
+              const title = String(row.display_name || row.name || row.email || `Record #${id}`);
+              const subtitle = String(row.email || row.phone || row.mobile || row.city || row.state_id || 'Odoo record');
+              return (
+                <button key={id} type="button" onClick={() => setSelectedIds({ ...selectedIds, [id]: !selected })} className={`record-card ${selected ? 'record-card-on' : ''}`}>
+                  <span className={`check-ring ${selected ? 'check-ring-on' : ''}`}>{selected ? '✓' : ''}</span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="flex items-center justify-between gap-3">
+                      <span className="truncate text-sm font-black text-white">{title}</span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-black text-cyan-100">#{id}</span>
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-slate-400">{subtitle}</span>
+                    <span className="mt-3 grid gap-1.5">
+                      {cols.slice(0, 4).map(c => row[c] ? (
+                        <span key={c} className="record-meta">
+                          <b>{c}</b><span>{String(row[c])}</span>
+                        </span>
+                      ) : null)}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {filtered.length > 240 && <div className="alert-card alert-amber">Ditampilkan 240 record pertama dari hasil filter agar browser tetap ringan. Persempit pencarian atau gunakan Load More bertahap.</div>}
         </div>
       )}
     </div>

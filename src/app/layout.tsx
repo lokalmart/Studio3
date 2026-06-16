@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Studio2 v9.1 · Lokalmart Odoo Command Studio',
-  description: 'Web3-style Vercel-only Odoo import/export command studio for Lokalmart.',
+  title: 'Studio2 v9.2 · Lokalmart Command Studio',
+  description: 'Command-grade Vercel-only Odoo import/export studio for Lokalmart.',
   manifest: '/manifest.webmanifest'
 };
 
