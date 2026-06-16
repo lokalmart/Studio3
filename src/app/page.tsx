@@ -1,43 +1,59 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 
-type Conn = {
-  url: string;
-  db: string;
-  username: string;
-  password: string;
-};
-
+type Conn = { url: string; db: string; username: string; password: string };
 type Row = Record<string, any>;
-type SheetState = { name: string; model: string; rows: Row[]; columns: string[]; kind: EditorKind; helper: boolean };
 type EditorKind = 'product' | 'contact' | 'project' | 'knowledge' | 'sales' | 'dynamic' | 'helper';
+type Mission = 'home' | 'import' | 'export' | 'review' | 'settings';
+type ImportStep = 'upload' | 'review' | 'editor' | 'execute';
+type ExportStep = 'choose' | 'records' | 'fields' | 'preview';
 type OdooField = { string?: string; type?: string; required?: boolean; readonly?: boolean; relation?: string; selection?: Array<[string, string]> };
+type SheetState = { name: string; model: string; rows: Row[]; columns: string[]; kind: EditorKind; helper: boolean };
+type Issue = { level: 'error' | 'warn' | 'ok'; title: string; detail?: string };
 type LogItem = { time: string; level: 'info' | 'ok' | 'warn' | 'error'; message: string; detail?: any };
+type ModelPreset = { key: string; label: string; model: string; kind: EditorKind; description: string; fields: string; risk: 'safe' | 'careful' | 'advanced'; icon: string };
 
-const STORAGE_KEY = 'studio2_v9_settings';
-const EXCEL_LIMIT = 32767;
+const STORAGE_KEY = 'studio2_v10_settings';
 const SAFE_LIMIT = 32000;
-const HELPER_SHEETS = new Set(['readme', 'readme_import', 'dashboard', 'validation_report', 'prompt', 'ai_memory_index', 'task_database', 'relationship_map', 'chatter_project', 'chatter_tasks', 'task_hierarchy']);
+const HELPER_SHEETS = new Set(['readme', 'readme_import', 'dashboard', 'validation_report', 'prompt', 'ai_memory_index', 'task_database', 'relationship_map', 'chatter_project', 'chatter_tasks', 'task_hierarchy', 'logs']);
 const META_COLUMNS = new Set(['_model', '__action', '_external_id', 'external_id', 'id', 'x_studio2_odoo_id', '__rownum__', '_studio2_truncated_fields', '_studio2_note', '_studio2_error']);
 const defaultConn: Conn = { url: '', db: '', username: '', password: '' };
 
+const MODEL_PRESETS: ModelPreset[] = [
+  { key: 'contacts', label: 'Contacts', model: 'res.partner', kind: 'contact', description: 'Pelanggan, supplier, agen, UMKM, vendor, dan member.', fields: 'name,display_name,email,phone,mobile,street,street2,city,state_id,country_id,customer_rank,supplier_rank,is_company,category_id,comment', risk: 'safe', icon: '◎' },
+  { key: 'products', label: 'Products', model: 'product.template', kind: 'product', description: 'Produk, harga, barcode, kategori, vendor, foto URL, dan publish.', fields: 'name,default_code,barcode,list_price,standard_price,categ_id,public_categ_ids,sale_ok,purchase_ok,website_published,description_sale,image_1920', risk: 'careful', icon: '◈' },
+  { key: 'projects', label: 'Projects', model: 'project.project', kind: 'project', description: 'Project utama: Ground Zero, Soraya Kitchen, Pilot, Ekspansi.', fields: 'name,display_name,partner_id,user_id,active,date_start,date,description,privacy_visibility,stage_id', risk: 'safe', icon: '▦' },
+  { key: 'tasks', label: 'Tasks', model: 'project.task', kind: 'project', description: 'Task, subtask, parent, stage, deadline, PIC, hierarchy.', fields: 'name,display_name,project_id,parent_id,stage_id,user_ids,partner_id,date_deadline,priority,sequence,description', risk: 'careful', icon: '☷' },
+  { key: 'knowledge', label: 'Knowledge', model: 'knowledge.article', kind: 'knowledge', description: 'SOP, konteks AI, rujukan project, dan artikel Knowledge.', fields: 'name,display_name,parent_id,body,body_html,create_date,write_date', risk: 'advanced', icon: '✦' },
+  { key: 'sales', label: 'Sales', model: 'sale.order', kind: 'sales', description: 'Sales order, customer, state, invoice, total, dan tanggal.', fields: 'name,partner_id,date_order,state,invoice_status,amount_untaxed,amount_tax,amount_total,validity_date,note', risk: 'advanced', icon: '₿' },
+  { key: 'categories', label: 'Categories', model: 'product.category', kind: 'product', description: 'Kategori teknis internal produk Lokalmart.', fields: 'name,display_name,parent_id,complete_name,property_cost_method,property_valuation', risk: 'safe', icon: '◇' },
+  { key: 'web_categories', label: 'Web Categories', model: 'product.public.category', kind: 'product', description: 'Kategori katalog website / ecommerce.', fields: 'name,display_name,parent_id,sequence,website_id', risk: 'safe', icon: '✧' }
+];
+
 function now() { return new Date().toLocaleTimeString('id-ID', { hour12: false }); }
+function compact(text: any, max = 72) { const s = String(text ?? ''); return s.length > max ? `${s.slice(0, max)}…` : s; }
+function parseCsvFields(text: string) { return text.split(',').map(x => x.trim()).filter(Boolean); }
+function dedupe<T>(arr: T[]) { return Array.from(new Set(arr)); }
+function sanitizeWorkbookValue(value: any) {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) return JSON.stringify(value).slice(0, SAFE_LIMIT);
+  const text = String(value);
+  return text.length > SAFE_LIMIT ? text.slice(0, SAFE_LIMIT) : value;
+}
+function normalizeRows(rows: Row[]) { return rows.map((row, index) => ({ ...row, __rownum__: row.__rownum__ || index + 2 })); }
+function makeColumns(rows: Row[]) { const set = new Set<string>(); rows.forEach(row => Object.keys(row).forEach(key => set.add(key))); return Array.from(set); }
 function detectModel(sheetName: string, rows: Row[]) {
-  const fromRow = rows.find(r => r._model)?._model;
-  if (fromRow) return String(fromRow).trim();
-  const normalized = sheetName.toLowerCase().trim();
-  const known: Record<string, string> = {
-    contacts: 'res.partner', contact: 'res.partner', partner: 'res.partner', partners: 'res.partner',
-    product: 'product.template', products: 'product.template', project: 'project.project', projects: 'project.project',
-    task: 'project.task', tasks: 'project.task', knowledge: 'knowledge.article', articles: 'knowledge.article',
-    sales: 'sale.order', orders: 'sale.order'
-  };
-  return known[normalized] || sheetName;
+  const rowModel = rows.find(row => row._model)?._model;
+  if (rowModel) return String(rowModel).trim();
+  const s = sheetName.toLowerCase().trim();
+  const known: Record<string, string> = { contacts: 'res.partner', contact: 'res.partner', partner: 'res.partner', partners: 'res.partner', product: 'product.template', products: 'product.template', project: 'project.project', projects: 'project.project', task: 'project.task', tasks: 'project.task', knowledge: 'knowledge.article', articles: 'knowledge.article', sales: 'sale.order', orders: 'sale.order' };
+  return known[s] || sheetName;
 }
 function detectKind(model: string, sheetName: string): EditorKind {
-  const m = String(model || '').toLowerCase(); const s = String(sheetName || '').toLowerCase();
+  const m = String(model || '').toLowerCase();
+  const s = String(sheetName || '').toLowerCase();
   if (HELPER_SHEETS.has(s) || m.includes('helper') || m.includes('readme')) return 'helper';
   if (m === 'res.partner') return 'contact';
   if (m === 'product.template' || m === 'product.product' || m === 'product.category' || m === 'product.public.category') return 'product';
@@ -46,278 +62,397 @@ function detectKind(model: string, sheetName: string): EditorKind {
   if (m.startsWith('sale.')) return 'sales';
   return 'dynamic';
 }
-function makeColumns(rows: Row[]) { const set = new Set<string>(); rows.forEach(row => Object.keys(row).forEach(k => set.add(k))); return Array.from(set); }
-function sanitizeWorkbookValue(value: any) {
-  if (value === null || value === undefined) return '';
-  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) return JSON.stringify(value).slice(0, SAFE_LIMIT);
-  const text = String(value);
-  return text.length > EXCEL_LIMIT ? text.slice(0, SAFE_LIMIT) : value;
-}
-function normalizeRowsForSheet(rows: Row[]) { return rows.map((row, idx) => ({ ...row, __rownum__: row.__rownum__ || idx + 2 })); }
 function rowsToSheetState(name: string, rawRows: Row[]): SheetState {
-  const rows = normalizeRowsForSheet(rawRows);
+  const rows = normalizeRows(rawRows);
   const model = detectModel(name, rows);
   const kind = detectKind(model, name);
   const helper = kind === 'helper' || HELPER_SHEETS.has(name.toLowerCase());
   const columns = makeColumns(rows);
-  if (!columns.includes('_model') && !helper) columns.unshift('_model');
-  if (!columns.includes('__action') && !helper) columns.unshift('__action');
-  if (!columns.includes('_external_id') && !helper) columns.unshift('_external_id');
+  if (!helper) {
+    if (!columns.includes('_model')) columns.unshift('_model');
+    if (!columns.includes('__action')) columns.unshift('__action');
+    if (!columns.includes('_external_id')) columns.unshift('_external_id');
+  }
   return { name, model, rows, columns, kind, helper };
 }
-function chunk<T>(arr: T[], size: number) { const out: T[][] = []; for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size)); return out; }
-function parseCsvFields(text: string) { return text.split(',').map(x => x.trim()).filter(Boolean); }
 function importantFields(kind: EditorKind, model: string) {
-  if (kind === 'contact') return ['name', 'display_name', 'phone', 'mobile', 'email', 'street', 'city', 'supplier_rank', 'customer_rank', 'is_company'];
-  if (kind === 'product') return ['name', 'default_code', 'barcode', 'list_price', 'standard_price', 'categ_id', 'public_categ_ids', 'image_1920', 'description_sale', 'sale_ok', 'purchase_ok'];
+  if (kind === 'contact') return ['name', 'display_name', 'phone', 'mobile', 'email', 'street', 'city', 'supplier_rank', 'customer_rank', 'is_company', 'comment'];
+  if (kind === 'product') return ['name', 'default_code', 'barcode', 'list_price', 'standard_price', 'categ_id', 'public_categ_ids', 'website_published', 'description_sale', 'image_1920'];
   if (kind === 'project') return ['name', 'project_id', 'parent_id', 'stage_id', 'user_id', 'user_ids', 'partner_id', 'date_deadline', 'description', 'priority', 'sequence'];
   if (kind === 'knowledge') return ['name', 'body', 'body_html', 'parent_id', 'category'];
   if (kind === 'sales') return ['name', 'partner_id', 'date_order', 'state', 'amount_total', 'invoice_status'];
   return ['display_name', 'name', 'create_date', 'write_date'];
 }
-function kindIcon(kind: EditorKind) {
-  return ({ product: '◈', contact: '◎', project: '▦', knowledge: '✦', sales: '₿', dynamic: '◇', helper: '✧' } as Record<EditorKind, string>)[kind];
-}
 function labelKind(kind: EditorKind) {
   return ({ product: 'Product', contact: 'Contact', project: 'Project', knowledge: 'Knowledge', sales: 'Sales', dynamic: 'Dynamic', helper: 'Context' } as Record<EditorKind, string>)[kind];
 }
-
-type ModelPreset = { key: string; label: string; model: string; kind: EditorKind; description: string; fields: string; tone: string };
-const MODEL_PRESETS: ModelPreset[] = [
-  { key: 'contacts', label: 'Contacts', model: 'res.partner', kind: 'contact', description: 'Customer, supplier, member, vendor, dan mitra Lokalmart.', fields: 'name,display_name,email,phone,mobile,street,street2,city,state_id,country_id,customer_rank,supplier_rank,is_company,comment', tone: 'violet' },
-  { key: 'products', label: 'Products', model: 'product.template', kind: 'product', description: 'Produk, harga, barcode, kategori, foto URL, dan data katalog.', fields: 'name,default_code,barcode,list_price,standard_price,categ_id,public_categ_ids,sale_ok,purchase_ok,website_published,description_sale,image_1920', tone: 'cyan' },
-  { key: 'projects', label: 'Projects', model: 'project.project', kind: 'project', description: 'Project utama seperti Ground Zero, Soraya Kitchen, dan Pilot.', fields: 'name,display_name,partner_id,user_id,active,date_start,date,description,privacy_visibility,stage_id', tone: 'amber' },
-  { key: 'tasks', label: 'Tasks', model: 'project.task', kind: 'project', description: 'Task, subtask, parent, stage, deadline, PIC, dan hierarchy.', fields: 'name,display_name,project_id,parent_id,stage_id,user_ids,partner_id,date_deadline,priority,sequence,description', tone: 'amber' },
-  { key: 'knowledge', label: 'Knowledge', model: 'knowledge.article', kind: 'knowledge', description: 'Artikel knowledge, SOP, konteks AI, dan rujukan project.', fields: 'name,display_name,parent_id,body,body_html,create_date,write_date', tone: 'fuchsia' },
-  { key: 'sales', label: 'Sales', model: 'sale.order', kind: 'sales', description: 'Sales order, customer, status invoice, total, dan tanggal order.', fields: 'name,partner_id,date_order,state,invoice_status,amount_untaxed,amount_tax,amount_total,validity_date,note', tone: 'emerald' },
-  { key: 'categories', label: 'Categories', model: 'product.category', kind: 'product', description: 'Kategori teknis internal produk Lokalmart.', fields: 'name,display_name,parent_id,complete_name,property_cost_method,property_valuation', tone: 'cyan' },
-  { key: 'website_categories', label: 'Web Categories', model: 'product.public.category', kind: 'product', description: 'Kategori katalog website/eCommerce untuk pelanggan.', fields: 'name,display_name,parent_id,sequence,website_id', tone: 'cyan' }
-];
-function findPresetByModel(model: string) { return MODEL_PRESETS.find(p => p.model === model); }
-function toneClass(tone: string) { return `tone-${tone}`; }
+function iconKind(kind: EditorKind) {
+  return ({ product: '◈', contact: '◎', project: '▦', knowledge: '✦', sales: '₿', dynamic: '◇', helper: '✧' } as Record<EditorKind, string>)[kind];
+}
+function chunk<T>(arr: T[], size: number) { const out: T[][] = []; for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size)); return out; }
 
 export default function HomePage() {
-  const [mode, setMode] = useState<'import' | 'export'>('import');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mission, setMission] = useState<Mission>('home');
+  const [importStep, setImportStep] = useState<ImportStep>('upload');
+  const [exportStep, setExportStep] = useState<ExportStep>('choose');
   const [conn, setConn] = useState<Conn>(defaultConn);
-  const [logs, setLogs] = useState<LogItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [logs, setLogs] = useState<LogItem[]>([]);
+  const [logOpen, setLogOpen] = useState(false);
   const [sheets, setSheets] = useState<SheetState[]>([]);
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
-  const activeSheet = sheets[activeSheetIndex];
   const [schema, setSchema] = useState<Record<string, OdooField> | null>(null);
   const [schemaModel, setSchemaModel] = useState('');
-  const [batchSize, setBatchSize] = useState(20);
   const [selectedRows, setSelectedRows] = useState<Record<number, boolean>>({});
-  const [exportModel, setExportModel] = useState('res.partner');
+  const [editorMode, setEditorMode] = useState<'cards' | 'grid'>('cards');
+  const [batchSize, setBatchSize] = useState(20);
+  const [selectedModelKeys, setSelectedModelKeys] = useState<Record<string, boolean>>({ contacts: true });
+  const [activeModel, setActiveModel] = useState('res.partner');
   const [exportFields, setExportFields] = useState(MODEL_PRESETS[0].fields);
-  const [exportDomain, setExportDomain] = useState('[]');
+  const [customModel, setCustomModel] = useState('');
+  const [customFields, setCustomFields] = useState('name,display_name,create_date,write_date');
+  const [domain, setDomain] = useState('[]');
   const [scanRecords, setScanRecords] = useState<Row[]>([]);
   const [scanCount, setScanCount] = useState(0);
   const [scanOffset, setScanOffset] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Record<number, boolean>>({});
+  const activeSheet = sheets[activeSheetIndex];
 
-  useEffect(() => { try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) setConn({ ...defaultConn, ...JSON.parse(raw) }); } catch {} }, []);
+  useEffect(() => {
+    try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) setConn({ ...defaultConn, ...JSON.parse(raw) }); } catch {}
+  }, []);
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(conn)); } catch {} }, [conn]);
   useEffect(() => { setSchema(null); setSchemaModel(''); setSelectedRows({}); }, [activeSheetIndex]);
 
-  function addLog(level: LogItem['level'], message: string, detail?: any) { setLogs(prev => [{ time: now(), level, message, detail }, ...prev].slice(0, 160)); }
+  function addLog(level: LogItem['level'], message: string, detail?: any) { setLogs(prev => [{ time: now(), level, message, detail }, ...prev].slice(0, 180)); }
   async function callOdoo(payload: Row) {
     const res = await fetch('/api/odoo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, connection: conn }) });
-    const data = await res.json(); if (!data.ok) throw new Error(data.error || 'API error'); return data;
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Odoo API error');
+    return data;
   }
-  async function testConnection() { setBusy(true); try { const data = await callOdoo({ action: 'test' }); addLog('ok', `Koneksi Odoo berhasil. UID ${data.uid}, kontak ${data.partner_count}.`); } catch (e: any) { addLog('error', `Koneksi gagal: ${e.message}`); } finally { setBusy(false); } }
-  async function loadSchema(model?: string) {
-    const target = model || activeSheet?.model || exportModel; if (!target) return; setBusy(true);
-    try { const data = await callOdoo({ action: 'schema', model: target }); setSchema(data.fields); setSchemaModel(target); addLog('ok', `Schema dimuat: ${target} (${Object.keys(data.fields || {}).length} field).`); }
-    catch (e: any) { addLog('error', `Gagal memuat schema ${target}: ${e.message}`); } finally { setBusy(false); }
+  async function testConnection() {
+    setBusy(true);
+    try { const data = await callOdoo({ action: 'test' }); addLog('ok', `Target Odoo tersambung. UID ${data.uid}, contacts ${data.partner_count}.`); }
+    catch (e: any) { addLog('error', `Koneksi gagal: ${e.message}`); }
+    finally { setBusy(false); }
   }
-  async function handleFile(file: File) {
-    setBusy(true); try {
-      const buffer = await file.arrayBuffer(); const wb = XLSX.read(buffer, { type: 'array', cellDates: false });
-      const parsed: SheetState[] = wb.SheetNames.map(name => rowsToSheetState(name, XLSX.utils.sheet_to_json<Row>(wb.Sheets[name], { defval: '' })));
-      setSheets(parsed); setActiveSheetIndex(0); setMode('import'); addLog('ok', `XLSX dibaca: ${parsed.length} sheet dari ${file.name}.`);
-    } catch (e: any) { addLog('error', `Gagal membaca XLSX: ${e.message}`); } finally { setBusy(false); }
+  async function loadSchema(model = activeSheet?.model) {
+    if (!model) return;
+    setBusy(true);
+    try { const data = await callOdoo({ action: 'schema', model }); setSchema(data.fields); setSchemaModel(model); addLog('ok', `Schema ${model} dimuat: ${Object.keys(data.fields || {}).length} field.`); }
+    catch (e: any) { addLog('error', `Schema gagal: ${e.message}`); }
+    finally { setBusy(false); }
   }
-  function updateCell(rowIndex: number, col: string, value: any) { setSheets(prev => prev.map((sheet, si) => si !== activeSheetIndex ? sheet : { ...sheet, rows: sheet.rows.map((row, ri) => ri === rowIndex ? { ...row, [col]: value } : row), columns: sheet.columns.includes(col) ? sheet.columns : [...sheet.columns, col] })); }
-  function addColumn() { const name = prompt('Nama kolom baru, misalnya x_review_status atau vendor_external_id'); if (!name || !activeSheet) return; setSheets(prev => prev.map((sheet, si) => si === activeSheetIndex ? { ...sheet, columns: sheet.columns.includes(name) ? sheet.columns : [...sheet.columns, name] } : sheet)); }
-  function addRow() { if (!activeSheet) return; setSheets(prev => prev.map((sheet, si) => si === activeSheetIndex ? { ...sheet, rows: [...sheet.rows, { _model: sheet.model, __action: 'upsert', _external_id: '', __rownum__: sheet.rows.length + 2 }] } : sheet)); }
-  function validateActiveSheet() {
-    if (!activeSheet) return [];
-    const issues: string[] = []; if (activeSheet.helper) return issues;
-    if (!activeSheet.model) issues.push('Model belum jelas. Isi _model atau ubah nama sheet sesuai model Odoo.');
-    activeSheet.rows.forEach((row, i) => { if (!row._model && !activeSheet.model) issues.push(`Row ${i + 2}: _model kosong.`); if (!row.__action) issues.push(`Row ${i + 2}: __action kosong; default tetap upsert.`); if (!row._external_id && !row.x_studio2_odoo_id && !row.id) issues.push(`Row ${i + 2}: _external_id kosong. Aman untuk create, kurang aman untuk update.`); });
-    if (schema && schemaModel === activeSheet.model) {
-      const unknown = activeSheet.columns.filter(c => !META_COLUMNS.has(c) && !c.endsWith('_external_id') && !c.endsWith('_external_ids') && !schema[c]);
-      if (unknown.length) issues.push(`Kolom tidak dikenal di ${activeSheet.model}: ${unknown.slice(0, 30).join(', ')}${unknown.length > 30 ? '...' : ''}`);
+  async function handleFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      const nextSheets = wb.SheetNames.map(name => rowsToSheetState(name, XLSX.utils.sheet_to_json<Row>(wb.Sheets[name], { defval: '' })));
+      setSheets(nextSheets);
+      setActiveSheetIndex(0);
+      setImportStep('review');
+      setMission('import');
+      addLog('ok', `${file.name} dibaca: ${nextSheets.length} sheet.`);
+    } catch (e: any) { addLog('error', `Gagal membaca XLSX: ${e.message}`); }
+    finally { setBusy(false); event.target.value = ''; }
+  }
+  function updateCell(rowIndex: number, column: string, value: any) {
+    setSheets(prev => prev.map((sheet, sheetIndex) => {
+      if (sheetIndex !== activeSheetIndex) return sheet;
+      const rows = sheet.rows.map((row, index) => index === rowIndex ? { ...row, [column]: value } : row);
+      const columns = sheet.columns.includes(column) ? sheet.columns : [...sheet.columns, column];
+      return { ...sheet, rows, columns };
+    }));
+  }
+  function addRow() {
+    if (!activeSheet) return;
+    setSheets(prev => prev.map((sheet, index) => index === activeSheetIndex ? { ...sheet, rows: [...sheet.rows, { _model: sheet.model, __action: 'upsert', __rownum__: sheet.rows.length + 2 }] } : sheet));
+  }
+  function addColumn() {
+    if (!activeSheet) return;
+    const name = prompt('Nama kolom Odoo / kolom XLSX baru:');
+    if (!name) return;
+    setSheets(prev => prev.map((sheet, index) => index === activeSheetIndex ? { ...sheet, columns: sheet.columns.includes(name) ? sheet.columns : [...sheet.columns, name], rows: sheet.rows.map(row => ({ ...row, [name]: row[name] ?? '' })) } : sheet));
+  }
+  function validateSheet(sheet = activeSheet): Issue[] {
+    if (!sheet) return [];
+    const issues: Issue[] = [];
+    if (sheet.helper) return [{ level: 'ok', title: 'Context/helper sheet', detail: 'Sheet ini dibaca sebagai konteks, bukan kandidat import ke Odoo.' }];
+    if (!sheet.model) issues.push({ level: 'error', title: 'Model belum jelas', detail: 'Isi kolom _model atau ubah nama sheet menjadi technical model Odoo.' });
+    const missingAction = sheet.rows.filter(row => !row.__action).length;
+    const missingExternal = sheet.rows.filter(row => !row._external_id && !row.x_studio2_odoo_id && !row.id).length;
+    if (missingAction) issues.push({ level: 'warn', title: `${missingAction} row belum punya __action`, detail: 'Studio akan memakai upsert sebagai default, tapi lebih baik tetap eksplisit.' });
+    if (missingExternal) issues.push({ level: 'warn', title: `${missingExternal} row belum punya external ID`, detail: 'Aman untuk create, kurang aman untuk update ulang.' });
+    if (schema && schemaModel === sheet.model) {
+      const unknown = sheet.columns.filter(c => !META_COLUMNS.has(c) && !c.endsWith('_external_id') && !c.endsWith('_external_ids') && !schema[c]);
+      if (unknown.length) issues.push({ level: 'warn', title: `${unknown.length} kolom tidak dikenal`, detail: unknown.slice(0, 18).join(', ') });
       const required = Object.entries(schema).filter(([, v]) => v.required && !v.readonly).map(([k]) => k);
-      const missing = required.filter(f => !activeSheet.columns.includes(f) && !activeSheet.columns.includes(`${f}_external_id`));
-      if (missing.length) issues.push(`Field wajib belum ada di sheet: ${missing.slice(0, 20).join(', ')}`);
+      const missingRequired = required.filter(f => !sheet.columns.includes(f) && !sheet.columns.includes(`${f}_external_id`));
+      if (missingRequired.length) issues.push({ level: 'error', title: `${missingRequired.length} field wajib belum ada`, detail: missingRequired.slice(0, 18).join(', ') });
+    } else {
+      issues.push({ level: 'warn', title: 'Schema belum dimuat', detail: 'Klik Cek Schema supaya Studio bisa membedakan field valid, required, relation, dan readonly.' });
     }
+    if (!issues.length) issues.push({ level: 'ok', title: 'Sheet terlihat aman', detail: 'Tidak ada error fatal dari pemeriksaan cepat.' });
     return issues;
   }
-  const issues = useMemo(() => validateActiveSheet(), [activeSheet, schema, schemaModel]);
-  async function importActiveSheet() {
-    if (!activeSheet) return; if (activeSheet.helper) return addLog('warn', 'Sheet helper/context tidak diimport. Pilih sheet model Odoo.');
-    const chosen = activeSheet.rows.filter((_, idx) => Object.keys(selectedRows).length ? selectedRows[idx] : true); if (!chosen.length) return addLog('warn', 'Tidak ada row dipilih untuk import.');
-    const parts = chunk(chosen, Math.max(1, Math.min(50, batchSize))); setBusy(true); addLog('info', `Mulai import ${chosen.length} row dari ${activeSheet.name} dalam ${parts.length} batch.`);
-    let totalCreated = 0, totalUpdated = 0, totalFailed = 0;
-    for (let i = 0; i < parts.length; i++) {
-      try { const data = await callOdoo({ action: 'import_batch', model: activeSheet.model, rows: parts[i] }); totalCreated += Number(data.created || 0); totalUpdated += Number(data.updated || 0); totalFailed += Number(data.failed || 0); addLog(data.failed ? 'warn' : 'ok', `Batch ${i + 1}/${parts.length}: created ${data.created}, updated ${data.updated}, failed ${data.failed}.`, data.results); if (data.failed) break; }
-      catch (e: any) { totalFailed += parts[i].length; addLog('error', `Batch ${i + 1} gagal: ${e.message}`); break; }
-    }
-    addLog(totalFailed ? 'warn' : 'ok', `Import selesai: created ${totalCreated}, updated ${totalUpdated}, failed ${totalFailed}.`); setBusy(false);
-  }
-  function downloadWorkbook(fileName = 'studio2_export.xlsx') {
-    if (!sheets.length) return; const wb = XLSX.utils.book_new();
-    sheets.forEach(sheet => { const cleanRows = sheet.rows.map(row => { const out: Row = {}; sheet.columns.forEach(col => out[col] = sanitizeWorkbookValue(row[col])); return out; }); const ws = XLSX.utils.json_to_sheet(cleanRows.length ? cleanRows : [{}], { header: sheet.columns.length ? sheet.columns : undefined }); XLSX.utils.book_append_sheet(wb, ws, sheet.name.slice(0, 31) || 'Sheet1'); });
-    XLSX.writeFile(wb, fileName); addLog('ok', `XLSX diunduh: ${fileName}`);
-  }
-  async function scanModel(reset = true) {
-    setBusy(true); try {
-      let domain: any[] = []; try { domain = JSON.parse(exportDomain || '[]'); } catch { throw new Error('Domain harus JSON array, contoh: [] atau [["is_company","=",true]]'); }
-      const offset = reset ? 0 : scanOffset; const kind = detectKind(exportModel, exportModel); const fields = Array.from(new Set([...importantFields(kind, exportModel), ...parseCsvFields(exportFields)])).filter(Boolean);
-      const data = await callOdoo({ action: 'record_scan', model: exportModel, fields, domain, offset, limit: 80 });
-      setScanCount(data.count || 0); setScanOffset(offset + (data.records?.length || 0)); setScanRecords(prev => reset ? data.records : [...prev, ...data.records]); if (reset) setSelectedIds({});
-      addLog('ok', `Scan ${exportModel}: ${data.records.length} record dimuat dari ${data.count}.`);
-    } catch (e: any) { addLog('error', `Scan gagal: ${e.message}`); } finally { setBusy(false); }
-  }
-  async function exportSelectedRecords() {
-    const ids = Object.entries(selectedIds).filter(([, v]) => v).map(([id]) => Number(id)); if (!ids.length) return addLog('warn', 'Belum ada record dipilih untuk export.');
-    setBusy(true); try { const data = await callOdoo({ action: 'export_records', model: exportModel, ids, fields: parseCsvFields(exportFields) }); const sheet = rowsToSheetState(data.sheet || exportModel, data.rows || []); setSheets([sheet]); setActiveSheetIndex(0); setMode('import'); addLog('ok', `Export ${ids.length} record dari ${exportModel} masuk editor XLSX.`); }
-    catch (e: any) { addLog('error', `Export gagal: ${e.message}`); } finally { setBusy(false); }
-  }
-  async function exportProject() {
-    const id = prompt('Masukkan ID project Odoo, contoh: 73'); if (!id) return; setBusy(true);
-    try { const data = await callOdoo({ action: 'export_project', project_id: Number(id) }); const nextSheets = Object.entries(data.sheets || {}).map(([name, rows]) => rowsToSheetState(name, rows as Row[])); setSheets(nextSheets); setActiveSheetIndex(0); setMode('import'); addLog('ok', `Project ${id} diexport ke ${nextSheets.length} sheet dan masuk editor.`); }
-    catch (e: any) { addLog('error', `Export project gagal: ${e.message}`); } finally { setBusy(false); }
-  }
+  const issues = useMemo(() => validateSheet(activeSheet), [activeSheet, schema, schemaModel]);
   const visibleColumns = useMemo(() => {
     if (!activeSheet) return [];
-    const priority = ['_model', '__action', '_external_id', 'x_studio2_odoo_id', ...importantFields(activeSheet.kind, activeSheet.model)]; const set = new Set(activeSheet.columns);
+    const priority = ['_model', '__action', '_external_id', 'x_studio2_odoo_id', ...importantFields(activeSheet.kind, activeSheet.model)];
+    const set = new Set(activeSheet.columns);
     return [...priority.filter(c => set.has(c)), ...activeSheet.columns.filter(c => !priority.includes(c) && c !== '__rownum__')];
   }, [activeSheet]);
-  const connectionOk = Boolean(conn.url && conn.db && conn.username && conn.password);
+  function downloadWorkbook(name = 'studio2_dataset.xlsx') {
+    if (!sheets.length) return;
+    const wb = XLSX.utils.book_new();
+    sheets.forEach(sheet => {
+      const rows = sheet.rows.map(row => { const out: Row = {}; sheet.columns.forEach(col => out[col] = sanitizeWorkbookValue(row[col])); return out; });
+      const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{}], { header: sheet.columns.length ? sheet.columns : undefined });
+      XLSX.utils.book_append_sheet(wb, ws, sheet.name.slice(0, 31) || 'Sheet1');
+    });
+    XLSX.writeFile(wb, name);
+    addLog('ok', `Download XLSX: ${name}`);
+  }
+  async function importActiveSheet() {
+    if (!activeSheet) return;
+    if (activeSheet.helper) { addLog('warn', 'Sheet context/helper tidak diimport.'); return; }
+    const chosen = activeSheet.rows.filter((_, index) => Object.keys(selectedRows).length ? selectedRows[index] : true);
+    if (!chosen.length) { addLog('warn', 'Tidak ada row dipilih.'); return; }
+    setBusy(true);
+    const parts = chunk(chosen, Math.max(1, Math.min(50, batchSize)));
+    addLog('info', `Mulai import ${chosen.length} row dalam ${parts.length} batch.`);
+    let created = 0, updated = 0, failed = 0;
+    for (let i = 0; i < parts.length; i++) {
+      try {
+        const data = await callOdoo({ action: 'import_batch', model: activeSheet.model, rows: parts[i] });
+        created += Number(data.created || 0); updated += Number(data.updated || 0); failed += Number(data.failed || 0);
+        addLog(data.failed ? 'warn' : 'ok', `Batch ${i + 1}/${parts.length}: create ${data.created}, update ${data.updated}, failed ${data.failed}.`, data.results);
+        if (data.failed) break;
+      } catch (e: any) { failed += parts[i].length; addLog('error', `Batch ${i + 1} gagal: ${e.message}`); break; }
+    }
+    addLog(failed ? 'warn' : 'ok', `Import selesai. Created ${created}, updated ${updated}, failed ${failed}.`);
+    setBusy(false);
+  }
+  function togglePreset(preset: ModelPreset) {
+    setSelectedModelKeys(prev => ({ ...prev, [preset.key]: !prev[preset.key] }));
+    setActiveModel(preset.model);
+    setExportFields(preset.fields);
+    setScanRecords([]); setSelectedIds({}); setScanOffset(0); setScanCount(0);
+  }
+  function choosePreset(preset: ModelPreset) {
+    setSelectedModelKeys(prev => ({ ...prev, [preset.key]: true }));
+    setActiveModel(preset.model);
+    setExportFields(preset.fields);
+    setScanRecords([]); setSelectedIds({}); setScanOffset(0); setScanCount(0);
+  }
+  async function scanModel(reset = true) {
+    setBusy(true);
+    try {
+      let parsedDomain: any[] = [];
+      try { parsedDomain = JSON.parse(domain || '[]'); } catch { throw new Error('Domain harus JSON array, contoh: []'); }
+      const offset = reset ? 0 : scanOffset;
+      const fields = dedupe([...importantFields(detectKind(activeModel, activeModel), activeModel), ...parseCsvFields(exportFields)]).filter(Boolean);
+      const data = await callOdoo({ action: 'record_scan', model: activeModel, fields, domain: parsedDomain, offset, limit: 80 });
+      setScanCount(data.count || 0);
+      setScanOffset(offset + (data.records?.length || 0));
+      setScanRecords(prev => reset ? data.records : [...prev, ...data.records]);
+      if (reset) setSelectedIds({});
+      setExportStep('records');
+      addLog('ok', `Scan ${activeModel}: ${data.records.length} dari ${data.count} record.`);
+    } catch (e: any) { addLog('error', `Scan gagal: ${e.message}`); }
+    finally { setBusy(false); }
+  }
+  async function exportSelectedRecords() {
+    const ids = Object.entries(selectedIds).filter(([, v]) => v).map(([id]) => Number(id));
+    if (!ids.length) { addLog('warn', 'Belum ada record dipilih untuk export.'); return; }
+    setBusy(true);
+    try {
+      const data = await callOdoo({ action: 'export_records', model: activeModel, ids, fields: parseCsvFields(exportFields) });
+      const sheet = rowsToSheetState(data.sheet || activeModel, data.rows || []);
+      setSheets([sheet]);
+      setActiveSheetIndex(0);
+      setMission('review');
+      setImportStep('editor');
+      setExportStep('preview');
+      addLog('ok', `${ids.length} record ${activeModel} diexport ke editor.`);
+    } catch (e: any) { addLog('error', `Export gagal: ${e.message}`); }
+    finally { setBusy(false); }
+  }
+  async function exportProject() {
+    const id = prompt('Masukkan ID project Odoo, contoh: 73');
+    if (!id) return;
+    setBusy(true);
+    try {
+      const data = await callOdoo({ action: 'export_project', project_id: Number(id) });
+      const nextSheets = Object.entries(data.sheets || {}).map(([name, rows]) => rowsToSheetState(name, rows as Row[]));
+      setSheets(nextSheets); setActiveSheetIndex(0); setMission('review'); setImportStep('editor');
+      addLog('ok', `Project ${id} diexport ke ${nextSheets.length} sheet.`);
+    } catch (e: any) { addLog('error', `Export project gagal: ${e.message}`); }
+    finally { setBusy(false); }
+  }
+  const connectionReady = Boolean(conn.url && conn.db && conn.username && conn.password);
+  const selectedRecordCount = Object.values(selectedIds).filter(Boolean).length;
   const selectedImportCount = Object.values(selectedRows).filter(Boolean).length;
-  const selectedExportCount = Object.values(selectedIds).filter(Boolean).length;
+  const activePreset = MODEL_PRESETS.find(p => p.model === activeModel);
 
   return (
-    <main className="app-bg min-h-screen pb-24 text-white md:pb-6">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1320px] flex-col gap-4 px-3 py-3 sm:px-5 lg:px-6">
-        <AppHeader mode={mode} setMode={setMode} settingsOpen={settingsOpen} setSettingsOpen={setSettingsOpen} connectionOk={connectionOk} busy={busy} />
-        {settingsOpen && <ConnectionCard conn={conn} setConn={setConn} testConnection={testConnection} busy={busy} connectionOk={connectionOk} />}
-        {mode === 'import' ? (
-          <ImportExperience busy={busy} sheets={sheets} activeSheet={activeSheet} activeSheetIndex={activeSheetIndex} setActiveSheetIndex={setActiveSheetIndex} onFile={handleFile} addRow={addRow} addColumn={addColumn} download={() => downloadWorkbook('studio2_edited.xlsx')} importActiveSheet={importActiveSheet} batchSize={batchSize} setBatchSize={setBatchSize} loadSchema={() => loadSchema()} selectedCount={selectedImportCount} issues={issues} columns={visibleColumns} schema={schemaModel === activeSheet?.model ? schema : null} selectedRows={selectedRows} setSelectedRows={setSelectedRows} updateCell={updateCell} />
-        ) : (
-          <ExportExperience busy={busy} model={exportModel} setModel={setExportModel} fields={exportFields} setFields={setExportFields} domain={exportDomain} setDomain={setExportDomain} scan={() => scanModel(true)} loadMore={() => scanModel(false)} exportSelected={exportSelectedRecords} exportProject={exportProject} scanCount={scanCount} scanOffset={scanOffset} records={scanRecords} selectedIds={selectedIds} setSelectedIds={setSelectedIds} loadSchema={() => loadSchema(exportModel)} selectedCount={selectedExportCount} />
-        )}
-        <LogDrawer logs={logs} />
+    <main className="min-h-screen pb-24 text-white md:pb-8">
+      <div className="orb orb-a" />
+      <div className="orb orb-b" />
+      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+        <TopBar mission={mission} setMission={setMission} connectionReady={connectionReady} busy={busy} openLogs={() => setLogOpen(true)} />
+        {mission === 'home' && <HomeMission connectionReady={connectionReady} setMission={setMission} sheets={sheets} logs={logs} scanCount={scanCount} />}
+        {mission === 'settings' && <SettingsScreen conn={conn} setConn={setConn} testConnection={testConnection} busy={busy} connectionReady={connectionReady} />}
+        {mission === 'import' && <ImportMission step={importStep} setStep={setImportStep} busy={busy} sheets={sheets} activeSheet={activeSheet} activeSheetIndex={activeSheetIndex} setActiveSheetIndex={setActiveSheetIndex} handleFile={handleFile} issues={issues} selectedImportCount={selectedImportCount} loadSchema={() => loadSchema()} setMission={setMission} />}
+        {mission === 'export' && <ExportMission step={exportStep} setStep={setExportStep} busy={busy} presets={MODEL_PRESETS} selectedModelKeys={selectedModelKeys} togglePreset={togglePreset} choosePreset={choosePreset} activeModel={activeModel} activePreset={activePreset} exportFields={exportFields} setExportFields={setExportFields} domain={domain} setDomain={setDomain} customModel={customModel} setCustomModel={setCustomModel} customFields={customFields} setCustomFields={setCustomFields} scanModel={() => scanModel(true)} loadMore={() => scanModel(false)} exportSelectedRecords={exportSelectedRecords} exportProject={exportProject} scanRecords={scanRecords} scanCount={scanCount} scanOffset={scanOffset} selectedIds={selectedIds} setSelectedIds={setSelectedIds} selectedRecordCount={selectedRecordCount} />}
+        {mission === 'review' && <ReviewMission activeSheet={activeSheet} activeSheetIndex={activeSheetIndex} sheets={sheets} setActiveSheetIndex={setActiveSheetIndex} issues={issues} columns={visibleColumns} schema={schemaModel === activeSheet?.model ? schema : null} editorMode={editorMode} setEditorMode={setEditorMode} selectedRows={selectedRows} setSelectedRows={setSelectedRows} updateCell={updateCell} addColumn={addColumn} addRow={addRow} loadSchema={() => loadSchema()} download={() => downloadWorkbook('studio2_edited.xlsx')} importActiveSheet={importActiveSheet} batchSize={batchSize} setBatchSize={setBatchSize} busy={busy} />}
       </div>
-      <MobileNav mode={mode} setMode={setMode} settingsOpen={settingsOpen} setSettingsOpen={setSettingsOpen} />
+      <BottomNav mission={mission} setMission={setMission} />
+      <LogSheet logs={logs} open={logOpen} onClose={() => setLogOpen(false)} />
     </main>
   );
 }
 
-function AppHeader({ mode, setMode, settingsOpen, setSettingsOpen, connectionOk, busy }: { mode: 'import' | 'export'; setMode: (m: 'import' | 'export') => void; settingsOpen: boolean; setSettingsOpen: (v: boolean) => void; connectionOk: boolean; busy: boolean }) {
-  return (
-    <header className="hero-card">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="brand-mark">LM</div>
-          <div className="min-w-0">
-            <div className="flex flex-wrap gap-1.5">
-              <span className="mini-badge">Studio2 v9.3</span>
-              <span className="mini-badge soft">Mobile Command</span>
-              <span className={connectionOk ? 'mini-badge ok' : 'mini-badge warn'}>{connectionOk ? 'Odoo ready' : 'Need setup'}</span>
-            </div>
-            <h1 className="mt-2 text-2xl font-black leading-none tracking-tight sm:text-4xl">Lokalmart Studio</h1>
-            <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-300 sm:text-sm">Import, export, validasi, dan edit data Odoo lewat workflow yang ringan—bukan spreadsheet mentah.</p>
-          </div>
-        </div>
-        <div className="hidden items-center gap-2 rounded-3xl border border-white/10 bg-white/5 p-1.5 md:flex">
-          <button className={`mode-btn ${mode === 'import' ? 'active' : ''}`} onClick={() => setMode('import')}>Import</button>
-          <button className={`mode-btn ${mode === 'export' ? 'active' : ''}`} onClick={() => setMode('export')}>Export</button>
-          <button className={`mode-btn ${settingsOpen ? 'active' : ''}`} onClick={() => setSettingsOpen(!settingsOpen)}>⚙</button>
-        </div>
+function TopBar({ mission, setMission, connectionReady, busy, openLogs }: { mission: Mission; setMission: (m: Mission) => void; connectionReady: boolean; busy: boolean; openLogs: () => void }) {
+  return <header className="top-shell">
+    <button className="brand" onClick={() => setMission('home')}>
+      <span className="brand-mark">LM</span>
+      <span><b>Lokalmart Studio</b><small>Data Command for Odoo</small></span>
+    </button>
+    <div className="top-actions">
+      <span className={connectionReady ? 'status ok' : 'status warn'}>{connectionReady ? 'Odoo ready' : 'Setup'}</span>
+      {busy && <span className="status pulse">Working</span>}
+      <button className={mission === 'settings' ? 'icon-btn active' : 'icon-btn'} onClick={() => setMission('settings')}>⚙</button>
+      <button className="icon-btn" onClick={openLogs}>⌁</button>
+    </div>
+  </header>;
+}
+
+function HomeMission({ connectionReady, setMission, sheets, logs, scanCount }: { connectionReady: boolean; setMission: (m: Mission) => void; sheets: SheetState[]; logs: LogItem[]; scanCount: number }) {
+  return <section className="mission-home">
+    <div className="hero-copy">
+      <span className="eyebrow">Studio2 v10 · Mission UX Rebuild</span>
+      <h1>Kontrol data Odoo tanpa tenggelam di spreadsheet.</h1>
+      <p>Mulai dari niat kerja: import data ke Odoo, export record dari Odoo, review hasil, lalu eksekusi aman per batch.</p>
+      <div className="hero-stats">
+        <Metric label="Target" value={connectionReady ? 'Ready' : 'Belum'} tone={connectionReady ? 'ok' : 'warn'} />
+        <Metric label="Dataset" value={sheets.length ? `${sheets.length} sheet` : 'Kosong'} />
+        <Metric label="Scan" value={scanCount ? `${scanCount} record` : 'Belum'} />
       </div>
-      {busy && <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/10"><div className="loading-line" /></div>}
-    </header>
-  );
+    </div>
+    <div className="mission-grid">
+      <MissionCard icon="↑" title="Import Mission" desc="Upload XLSX, baca sheet, cek schema, edit row, lalu kirim batch kecil ke Odoo." cta="Mulai import" onClick={() => setMission('import')} />
+      <MissionCard icon="↓" title="Export Mission" desc="Pilih model lewat checklist, scan record, pilih field, export ke editor, lalu download." cta="Mulai export" onClick={() => setMission('export')} />
+      <MissionCard icon="◇" title="Review Workspace" desc="Buka dataset aktif sebagai object editor, bukan tabel mentah. Cocok untuk validasi sebelum import ulang." cta="Buka review" onClick={() => setMission('review')} muted />
+      <MissionCard icon="⚙" title="Koneksi Odoo" desc="Simpan target Odoo di browser. Tidak masuk GitHub dan tidak perlu environment secret." cta="Atur koneksi" onClick={() => setMission('settings')} muted />
+    </div>
+    <div className="recent-panel">
+      <div><b>Activity trail</b><small>Log teknis disembunyikan di sini supaya layar utama tetap tenang.</small></div>
+      <div className="mini-log-list">{logs.slice(0, 4).map((log, idx) => <span key={idx} className={`log-pill ${log.level}`}>{log.time} · {compact(log.message, 54)}</span>)}{!logs.length && <span className="empty-note">Belum ada aktivitas.</span>}</div>
+    </div>
+  </section>;
+}
+function MissionCard({ icon, title, desc, cta, onClick, muted }: { icon: string; title: string; desc: string; cta: string; onClick: () => void; muted?: boolean }) {
+  return <button className={muted ? 'mission-card muted' : 'mission-card'} onClick={onClick}><span className="card-icon">{icon}</span><span><b>{title}</b><small>{desc}</small><em>{cta}</em></span></button>;
+}
+function Metric({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'warn' }) { return <div className={`metric ${tone || ''}`}><small>{label}</small><b>{value}</b></div>; }
+
+function SettingsScreen({ conn, setConn, testConnection, busy, connectionReady }: { conn: Conn; setConn: React.Dispatch<React.SetStateAction<Conn>>; testConnection: () => void; busy: boolean; connectionReady: boolean }) {
+  return <section className="screen-stack">
+    <SectionTitle overline="Connection" title="Target Odoo" desc="Credential disimpan di browser localStorage. Jangan upload password/API key ke GitHub." />
+    <div className="settings-card">
+      <Field label="Odoo URL" value={conn.url} onChange={v => setConn(c => ({ ...c, url: v }))} placeholder="https://edu-lokalmart.odoo.com" />
+      <Field label="Database" value={conn.db} onChange={v => setConn(c => ({ ...c, db: v }))} placeholder="edu-lokalmart" />
+      <Field label="Username" value={conn.username} onChange={v => setConn(c => ({ ...c, username: v }))} placeholder="email Odoo" />
+      <Field label="Password / API key" type="password" value={conn.password} onChange={v => setConn(c => ({ ...c, password: v }))} placeholder="••••••" />
+      <button className="primary-action wide" onClick={testConnection} disabled={busy}>{busy ? 'Mengetes…' : connectionReady ? 'Tes ulang koneksi' : 'Tes koneksi'}</button>
+    </div>
+  </section>;
+}
+function Field({ label, value, onChange, placeholder, type = 'text' }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) { return <label className="field"><span>{label}</span><input type={type} value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} /></label>; }
+function SectionTitle({ overline, title, desc }: { overline: string; title: string; desc: string }) { return <div className="section-title"><span>{overline}</span><h2>{title}</h2><p>{desc}</p></div>; }
+
+function ImportMission(props: { step: ImportStep; setStep: (s: ImportStep) => void; busy: boolean; sheets: SheetState[]; activeSheet?: SheetState; activeSheetIndex: number; setActiveSheetIndex: (i: number) => void; handleFile: (e: ChangeEvent<HTMLInputElement>) => void; issues: Issue[]; selectedImportCount: number; loadSchema: () => void; setMission: (m: Mission) => void }) {
+  const { step, setStep, busy, sheets, activeSheet, activeSheetIndex, setActiveSheetIndex, handleFile, issues, loadSchema, setMission } = props;
+  return <section className="screen-stack">
+    <SectionTitle overline="Import Mission" title="Bawa XLSX ke Odoo dengan aman" desc="Upload dulu, Studio membaca sheet sebagai dataset, bukan langsung mengirim ke Odoo." />
+    <StepRail steps={['Upload', 'Review', 'Editor', 'Execute']} active={['upload','review','editor','execute'].indexOf(step)} />
+    {!sheets.length && <label className="drop-zone"><input type="file" accept=".xlsx,.xls" onChange={handleFile} disabled={busy} /><span>↑</span><b>Upload XLSX</b><small>File dibaca di browser. Setelah itu kamu pilih sheet dan cek schema.</small></label>}
+    {!!sheets.length && <DatasetOverview sheets={sheets} activeSheetIndex={activeSheetIndex} setActiveSheetIndex={setActiveSheetIndex} />}
+    {!!activeSheet && <div className="focus-card">
+      <div className="object-head"><span className="object-icon">{iconKind(activeSheet.kind)}</span><div><b>{activeSheet.name}</b><small>{activeSheet.model} · {activeSheet.rows.length} rows · {activeSheet.columns.length} fields</small></div><span className="chip">{labelKind(activeSheet.kind)}</span></div>
+      <IssueList issues={issues.slice(0, 3)} />
+      <div className="action-row"><button className="secondary-action" onClick={loadSchema}>Cek schema</button><button className="primary-action" onClick={() => { setStep('editor'); setMission('review'); }}>Buka editor</button></div>
+    </div>}
+  </section>;
+}
+function StepRail({ steps, active }: { steps: string[]; active: number }) { return <div className="step-rail">{steps.map((s, i) => <span key={s} className={i <= active ? 'done' : ''}><b>{i+1}</b>{s}</span>)}</div>; }
+function DatasetOverview({ sheets, activeSheetIndex, setActiveSheetIndex }: { sheets: SheetState[]; activeSheetIndex: number; setActiveSheetIndex: (i: number) => void }) {
+  return <div className="sheet-carousel">{sheets.map((sheet, index) => <button key={sheet.name} className={index === activeSheetIndex ? 'sheet-card active' : 'sheet-card'} onClick={() => setActiveSheetIndex(index)}><b>{sheet.name}</b><small>{sheet.model}</small><em>{sheet.rows.length} row · {labelKind(sheet.kind)}</em></button>)}</div>;
+}
+function IssueList({ issues }: { issues: Issue[] }) { return <div className="issue-list">{issues.map((issue, idx) => <div key={idx} className={`issue ${issue.level}`}><b>{issue.title}</b>{issue.detail && <small>{issue.detail}</small>}</div>)}</div>; }
+
+function ExportMission(props: { step: ExportStep; setStep: (s: ExportStep) => void; busy: boolean; presets: ModelPreset[]; selectedModelKeys: Record<string, boolean>; togglePreset: (p: ModelPreset) => void; choosePreset: (p: ModelPreset) => void; activeModel: string; activePreset?: ModelPreset; exportFields: string; setExportFields: (v: string) => void; domain: string; setDomain: (v: string) => void; customModel: string; setCustomModel: (v: string) => void; customFields: string; setCustomFields: (v: string) => void; scanModel: () => void; loadMore: () => void; exportSelectedRecords: () => void; exportProject: () => void; scanRecords: Row[]; scanCount: number; scanOffset: number; selectedIds: Record<number, boolean>; setSelectedIds: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; selectedRecordCount: number }) {
+  const p = props;
+  return <section className="screen-stack">
+    <SectionTitle overline="Export Mission" title="Pilih data yang ingin dibawa keluar" desc="Model utama tampil sebagai checklist mission card. Technical model ada di Advanced supaya layar tetap bersih." />
+    <StepRail steps={['Pilih Data', 'Scan Record', 'Pilih Field', 'Preview']} active={['choose','records','fields','preview'].indexOf(p.step)} />
+    <div className="model-grid">{p.presets.map(preset => <button key={preset.key} className={p.activeModel === preset.model ? 'model-card active' : 'model-card'} onClick={() => p.choosePreset(preset)}><span className="check" onClick={(e) => { e.stopPropagation(); p.togglePreset(preset); }}>{p.selectedModelKeys[preset.key] ? '✓' : ''}</span><span className="model-icon">{preset.icon}</span><b>{preset.label}</b><small>{preset.description}</small><em>{preset.model}</em><i className={`risk ${preset.risk}`}>{preset.risk}</i></button>)}</div>
+    <details className="advanced"><summary>Advanced: custom model dan domain</summary><div className="advanced-grid"><Field label="Custom model" value={p.customModel} onChange={v => { p.setCustomModel(v); if (v) p.choosePreset({ key: 'custom', label: 'Custom', model: v, kind: 'dynamic', description: '', fields: p.customFields, risk: 'advanced', icon: '◇' }); }} placeholder="x_custom_model" /><Field label="Domain JSON" value={p.domain} onChange={p.setDomain} placeholder='[]' /><label className="field wide"><span>Fields</span><textarea value={p.exportFields} onChange={e => p.setExportFields(e.target.value)} /></label></div></details>
+    <div className="focus-card">
+      <div className="object-head"><span className="object-icon">{p.activePreset?.icon || '◇'}</span><div><b>{p.activePreset?.label || 'Custom Model'}</b><small>{p.activeModel} · {parseCsvFields(p.exportFields).length} default fields</small></div><span className="chip">Target aktif</span></div>
+      <div className="field-pills">{parseCsvFields(p.exportFields).slice(0, 12).map(f => <span key={f}>{f}</span>)}{parseCsvFields(p.exportFields).length > 12 && <span>+{parseCsvFields(p.exportFields).length - 12}</span>}</div>
+      <div className="action-row"><button className="secondary-action" onClick={p.exportProject}>Export project by ID</button><button className="primary-action" onClick={p.scanModel} disabled={p.busy}>{p.busy ? 'Scanning…' : 'Scan record'}</button></div>
+    </div>
+    {!!p.scanRecords.length && <RecordPicker records={p.scanRecords} count={p.scanCount} offset={p.scanOffset} selectedIds={p.selectedIds} setSelectedIds={p.setSelectedIds} loadMore={p.loadMore} exportSelected={p.exportSelectedRecords} selectedRecordCount={p.selectedRecordCount} />}
+  </section>;
+}
+function RecordPicker({ records, count, offset, selectedIds, setSelectedIds, loadMore, exportSelected, selectedRecordCount }: { records: Row[]; count: number; offset: number; selectedIds: Record<number, boolean>; setSelectedIds: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; loadMore: () => void; exportSelected: () => void; selectedRecordCount: number }) {
+  const [q, setQ] = useState('');
+  const visible = records.filter(r => JSON.stringify(r).toLowerCase().includes(q.toLowerCase()));
+  return <div className="record-zone"><div className="record-head"><div><b>{count} record ditemukan</b><small>{selectedRecordCount} dipilih · {offset} sudah dimuat</small></div><input value={q} onChange={e => setQ(e.target.value)} placeholder="Cari record…" /></div><div className="record-list">{visible.map(row => { const id = Number(row.id); const title = row.display_name || row.name || row.email || `Record ${id}`; return <label key={id} className={selectedIds[id] ? 'record-card selected' : 'record-card'}><input type="checkbox" checked={Boolean(selectedIds[id])} onChange={e => setSelectedIds(prev => ({ ...prev, [id]: e.target.checked }))} /><span><b>{compact(title, 60)}</b><small>ID {id} · {compact(row.email || row.phone || row.mobile || row.default_code || row.create_date || '', 80)}</small></span></label>; })}</div><div className="action-row sticky-actions"><button className="secondary-action" onClick={loadMore}>Muat lagi</button><button className="primary-action" onClick={exportSelected}>Export {selectedRecordCount || ''} record</button></div></div>;
 }
 
-function MobileNav({ mode, setMode, settingsOpen, setSettingsOpen }: { mode: 'import' | 'export'; setMode: (m: 'import' | 'export') => void; settingsOpen: boolean; setSettingsOpen: (v: boolean) => void }) {
-  return <nav className="mobile-nav md:hidden"><button className={mode === 'import' ? 'on' : ''} onClick={() => setMode('import')}>⇧<span>Import</span></button><button className={mode === 'export' ? 'on' : ''} onClick={() => setMode('export')}>⇩<span>Export</span></button><button className={settingsOpen ? 'on' : ''} onClick={() => setSettingsOpen(!settingsOpen)}>⚙<span>Koneksi</span></button></nav>;
+function ReviewMission(props: { activeSheet?: SheetState; activeSheetIndex: number; sheets: SheetState[]; setActiveSheetIndex: (i: number) => void; issues: Issue[]; columns: string[]; schema: Record<string, OdooField> | null; editorMode: 'cards' | 'grid'; setEditorMode: (m: 'cards' | 'grid') => void; selectedRows: Record<number, boolean>; setSelectedRows: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; updateCell: (rowIndex: number, column: string, value: any) => void; addColumn: () => void; addRow: () => void; loadSchema: () => void; download: () => void; importActiveSheet: () => void; batchSize: number; setBatchSize: (n: number) => void; busy: boolean }) {
+  const p = props;
+  if (!p.activeSheet) return <section className="screen-stack"><SectionTitle overline="Review" title="Belum ada dataset aktif" desc="Upload XLSX atau export record dulu supaya editor terbuka." /></section>;
+  return <section className="screen-stack review-screen">
+    <SectionTitle overline="Review Workspace" title={p.activeSheet.name} desc={`${p.activeSheet.model} · ${p.activeSheet.rows.length} rows · ${p.activeSheet.columns.length} fields`} />
+    <DatasetOverview sheets={p.sheets} activeSheetIndex={p.activeSheetIndex} setActiveSheetIndex={p.setActiveSheetIndex} />
+    <div className="review-toolbar"><button className={p.editorMode === 'cards' ? 'tab active' : 'tab'} onClick={() => p.setEditorMode('cards')}>Object cards</button><button className={p.editorMode === 'grid' ? 'tab active' : 'tab'} onClick={() => p.setEditorMode('grid')}>Grid</button><button className="tab" onClick={p.loadSchema}>Schema</button><button className="tab" onClick={p.addColumn}>+ Field</button><button className="tab" onClick={p.addRow}>+ Row</button></div>
+    <IssueList issues={p.issues} />
+    {p.editorMode === 'cards' ? <ObjectEditor sheet={p.activeSheet} columns={p.columns} schema={p.schema} selectedRows={p.selectedRows} setSelectedRows={p.setSelectedRows} updateCell={p.updateCell} /> : <GridEditor sheet={p.activeSheet} columns={p.columns} updateCell={p.updateCell} selectedRows={p.selectedRows} setSelectedRows={p.setSelectedRows} />}
+    <div className="execute-bar"><label><span>Batch</span><input type="number" min={1} max={50} value={p.batchSize} onChange={e => p.setBatchSize(Number(e.target.value) || 20)} /></label><button className="secondary-action" onClick={p.download}>Download XLSX</button><button className="primary-action" onClick={p.importActiveSheet} disabled={p.busy}>{p.busy ? 'Importing…' : 'Import sheet aktif'}</button></div>
+  </section>;
+}
+function ObjectEditor({ sheet, columns, schema, selectedRows, setSelectedRows, updateCell }: { sheet: SheetState; columns: string[]; schema: Record<string, OdooField> | null; selectedRows: Record<number, boolean>; setSelectedRows: React.Dispatch<React.SetStateAction<Record<number, boolean>>>; updateCell: (rowIndex: number, column: string, value: any) => void }) {
+  const groups = groupFields(sheet.kind, columns);
+  return <div className="object-list">{sheet.rows.slice(0, 120).map((row, rowIndex) => <details className="object-row" key={rowIndex} open={rowIndex === 0}><summary><label onClick={e => e.stopPropagation()}><input type="checkbox" checked={Boolean(selectedRows[rowIndex])} onChange={e => setSelectedRows(prev => ({ ...prev, [rowIndex]: e.target.checked }))} /></label><span className="object-icon small">{iconKind(sheet.kind)}</span><span><b>{compact(row.name || row.display_name || row._external_id || `${sheet.name} row ${rowIndex + 1}`, 72)}</b><small>{sheet.model} · row {row.__rownum__ || rowIndex + 2}</small></span></summary><div className="field-groups">{groups.map(group => <div className="field-group" key={group.title}><h3>{group.title}</h3><div className="form-grid">{group.fields.map(col => <SmartInput key={col} col={col} value={row[col] ?? ''} field={schema?.[col]} onChange={v => updateCell(rowIndex, col, v)} />)}</div></div>)}</div></details>)}</div>;
+}
+function groupFields(kind: EditorKind, columns: string[]) {
+  const priority = importantFields(kind, '');
+  const basic = columns.filter(c => ['_model','__action','_external_id','x_studio2_odoo_id','id','name','display_name'].includes(c));
+  const main = columns.filter(c => priority.includes(c) && !basic.includes(c));
+  const technical = columns.filter(c => !basic.includes(c) && !main.includes(c) && c !== '__rownum__');
+  return [{ title: 'Identity', fields: basic }, { title: labelKind(kind), fields: main }, { title: 'Technical & others', fields: technical.slice(0, 80) }].filter(g => g.fields.length);
+}
+function SmartInput({ col, value, field, onChange }: { col: string; value: any; field?: OdooField; onChange: (v: any) => void }) {
+  const type = field?.type;
+  if (type === 'boolean') return <label className="smart-field check-field"><span>{field?.string || col}<small>{col}</small></span><input type="checkbox" checked={Boolean(value === true || String(value).toLowerCase() === 'true')} onChange={e => onChange(e.target.checked)} /></label>;
+  if (type === 'selection' && field?.selection) return <label className="smart-field"><span>{field.string || col}<small>{col}</small></span><select value={String(value ?? '')} onChange={e => onChange(e.target.value)}><option value="">—</option>{field.selection.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label>;
+  if (type === 'text' || type === 'html' || String(value || '').length > 100) return <label className="smart-field wide"><span>{field?.string || col}<small>{col}{field?.relation ? ` · ${field.relation}` : ''}</small></span><textarea value={String(value ?? '')} onChange={e => onChange(e.target.value)} /></label>;
+  return <label className="smart-field"><span>{field?.string || col}<small>{col}{field?.relation ? ` · ${field.relation}` : field?.type ? ` · ${field.type}` : ''}</small></span><input value={String(value ?? '')} onChange={e => onChange(e.target.value)} /></label>;
+}
+function GridEditor({ sheet, columns, updateCell, selectedRows, setSelectedRows }: { sheet: SheetState; columns: string[]; updateCell: (rowIndex: number, column: string, value: any) => void; selectedRows: Record<number, boolean>; setSelectedRows: React.Dispatch<React.SetStateAction<Record<number, boolean>>> }) {
+  return <div className="grid-wrap"><table><thead><tr><th>✓</th>{columns.map(col => <th key={col}>{col}</th>)}</tr></thead><tbody>{sheet.rows.slice(0, 120).map((row, rowIndex) => <tr key={rowIndex}><td><input type="checkbox" checked={Boolean(selectedRows[rowIndex])} onChange={e => setSelectedRows(prev => ({ ...prev, [rowIndex]: e.target.checked }))} /></td>{columns.map(col => <td key={col}><input value={String(row[col] ?? '')} onChange={e => updateCell(rowIndex, col, e.target.value)} /></td>)}</tr>)}</tbody></table></div>;
 }
 
-function ConnectionCard({ conn, setConn, testConnection, busy, connectionOk }: { conn: Conn; setConn: (c: Conn) => void; testConnection: () => void; busy: boolean; connectionOk: boolean }) {
-  return <section className="glass-card p-4"><div className="mb-3 flex items-center justify-between"><div><div className="eyebrow">Connection vault</div><h2 className="text-xl font-black">Target Odoo</h2></div><span className={connectionOk ? 'status ok' : 'status warn'}>{connectionOk ? 'Siap' : 'Belum lengkap'}</span></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><FloatingInput label="Odoo URL" placeholder="https://xxx.odoo.com" value={conn.url} onChange={v => setConn({ ...conn, url: v })} /><FloatingInput label="Database" placeholder="nama database" value={conn.db} onChange={v => setConn({ ...conn, db: v })} /><FloatingInput label="Username" placeholder="email/username" value={conn.username} onChange={v => setConn({ ...conn, username: v })} /><FloatingInput label="Password / API Key" placeholder="localStorage" type="password" value={conn.password} onChange={v => setConn({ ...conn, password: v })} /><button className="primary-btn min-h-[58px]" disabled={busy || !connectionOk} onClick={testConnection}>Tes Koneksi</button></div></section>;
+function BottomNav({ mission, setMission }: { mission: Mission; setMission: (m: Mission) => void }) {
+  const items: Array<[Mission, string, string]> = [['home','⌂','Home'], ['import','↑','Import'], ['export','↓','Export'], ['review','◇','Review'], ['settings','⚙','Koneksi']];
+  return <nav className="bottom-nav">{items.map(([key, icon, label]) => <button key={key} className={mission === key ? 'active' : ''} onClick={() => setMission(key)}><span>{icon}</span>{label}</button>)}</nav>;
 }
-
-function FloatingInput({ label, value, onChange, placeholder, type = 'text' }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
-  return <label className="input-card"><span>{label}</span><input placeholder={placeholder} type={type} value={value} onChange={e => onChange(e.target.value)} /></label>;
-}
-
-function ImportExperience(props: { busy: boolean; sheets: SheetState[]; activeSheet?: SheetState; activeSheetIndex: number; setActiveSheetIndex: (n: number) => void; onFile: (f: File) => void; addRow: () => void; addColumn: () => void; download: () => void; importActiveSheet: () => void; batchSize: number; setBatchSize: (n: number) => void; loadSchema: () => void; selectedCount: number; issues: string[]; columns: string[]; schema: Record<string, OdooField> | null; selectedRows: Record<number, boolean>; setSelectedRows: (x: Record<number, boolean>) => void; updateCell: (row: number, col: string, value: any) => void }) {
-  if (!props.sheets.length) return <StartImport onFile={props.onFile} />;
-  return <section className="space-y-4"><MobileStepper labels={['Upload', 'Sheet', 'Validasi', 'Import']} active={props.activeSheet ? 2 : 1} /><SheetSwitcher sheets={props.sheets} activeIndex={props.activeSheetIndex} setActiveIndex={props.setActiveSheetIndex} /><ActionDock primary="Import" primaryAction={props.importActiveSheet} disabled={props.busy} items={[['Schema', props.loadSchema], ['+ Row', props.addRow], ['+ Kolom', props.addColumn], ['Download', props.download]]} extra={<label className="tiny-upload"><input className="hidden" type="file" accept=".xlsx,.xls" onChange={e => e.target.files?.[0] && props.onFile(e.target.files[0])} />Ganti XLSX</label>} /><Editor sheet={props.activeSheet!} columns={props.columns} schema={props.schema} issues={props.issues} selectedRows={props.selectedRows} setSelectedRows={props.setSelectedRows} updateCell={props.updateCell} /></section>;
-}
-
-function StartImport({ onFile }: { onFile: (f: File) => void }) {
-  return <section className="start-grid"><div className="start-card"><div className="app-chip">Import Mission</div><h2 className="mt-4 text-3xl font-black sm:text-5xl">Buka XLSX, lalu rapikan sebelum masuk Odoo.</h2><p className="mt-4 max-w-xl text-sm leading-6 text-slate-300">Studio membaca file di browser, mengenali model, lalu menampilkan editor yang sesuai: contact, product, project, knowledge, atau dynamic Odoo.</p><label className="upload-hero mt-6"><input className="hidden" type="file" accept=".xlsx,.xls" onChange={e => e.target.files?.[0] && onFile(e.target.files[0])} /><span>＋</span><b>Pilih XLSX</b><small>Preview lokal · aman untuk Vercel</small></label></div><div className="feature-stack"><Feature n="01" title="Preview dulu" text="Tidak langsung import. Semua sheet dibaca sebagai draft kerja." /><Feature n="02" title="Editor per model" text="res.partner jadi contact, product jadi product, project jadi project." /><Feature n="03" title="Batch aman" text="Import dipecah kecil agar tidak menabrak timeout Vercel." /></div></section>;
-}
-
-function Feature({ n, title, text }: { n: string; title: string; text: string }) { return <div className="feature-card"><span>{n}</span><b>{title}</b><p>{text}</p></div>; }
-function MobileStepper({ labels, active }: { labels: string[]; active: number }) { return <div className="stepper">{labels.map((label, i) => <div key={label} className={i <= active ? 'done' : ''}><span>{i + 1}</span><b>{label}</b></div>)}</div>; }
-function SheetSwitcher({ sheets, activeIndex, setActiveIndex }: { sheets: SheetState[]; activeIndex: number; setActiveIndex: (n: number) => void }) { return <div className="sheet-strip">{sheets.map((s, i) => <button key={s.name} className={i === activeIndex ? 'on' : ''} onClick={() => setActiveIndex(i)}><span>{kindIcon(s.kind)}</span><b>{s.name}</b><small>{s.rows.length} row · {s.model}</small></button>)}</div>; }
-function ActionDock({ primary, primaryAction, disabled, items, extra }: { primary: string; primaryAction: () => void; disabled?: boolean; items: Array<[string, () => void]>; extra?: React.ReactNode }) { return <div className="action-dock"><button className="primary-btn" disabled={disabled} onClick={primaryAction}>{primary}</button><div className="quick-actions">{items.map(([label, fn]) => <button key={label} onClick={fn}>{label}</button>)}{extra}</div></div>; }
-
-function ExportExperience(props: { busy: boolean; model: string; setModel: (s: string) => void; fields: string; setFields: (s: string) => void; domain: string; setDomain: (s: string) => void; scan: () => void; loadMore: () => void; exportSelected: () => void; exportProject: () => void; scanCount: number; scanOffset: number; records: Row[]; selectedIds: Record<number, boolean>; setSelectedIds: (x: Record<number, boolean>) => void; loadSchema: () => void; selectedCount: number }) {
-  return <section className="space-y-4"><MobileStepper labels={['Model', 'Scan', 'Pilih', 'Export']} active={props.records.length ? (props.selectedCount ? 2 : 1) : 0} /><div className="mission-layout"><MissionSelector model={props.model} setModel={props.setModel} setFields={props.setFields} fields={props.fields} setFieldsText={props.setFields} domain={props.domain} setDomain={props.setDomain} scan={props.scan} busy={props.busy} loadSchema={props.loadSchema} exportProject={props.exportProject} /><div className="min-w-0"><ActionDock primary="Export Terpilih" primaryAction={props.exportSelected} disabled={props.busy || props.selectedCount === 0} items={[['Scan', props.scan], ['Load more', props.loadMore], ['Schema', props.loadSchema], ['Project', props.exportProject]]} /><RecordPicker records={props.records} selectedIds={props.selectedIds} setSelectedIds={props.setSelectedIds} scanCount={props.scanCount} /></div></div></section>;
-}
-
-function MissionSelector(props: { model: string; setModel: (s: string) => void; setFields: (s: string) => void; fields: string; setFieldsText: (s: string) => void; domain: string; setDomain: (s: string) => void; scan: () => void; busy: boolean; loadSchema: () => void; exportProject: () => void }) {
-  const activePreset = findPresetByModel(props.model);
-  return <div className="mission-card"><div className="eyebrow">Export mission</div><h2 className="mt-1 text-2xl font-black">Pilih data</h2><p className="mt-2 text-sm leading-6 text-slate-300">Checklist model utama. Custom tetap ada, tapi tidak mengganggu layar utama.</p><div className="model-grid mt-4">{MODEL_PRESETS.map(p => <button key={p.key} className={`model-card ${toneClass(p.tone)} ${props.model === p.model ? 'on' : ''}`} onClick={() => { props.setModel(p.model); props.setFields(p.fields); }}><span className="check">{props.model === p.model ? '✓' : ''}</span><b>{kindIcon(p.kind)} {p.label}</b><small>{p.model}</small><em>{p.description}</em></button>)}</div><details className="advanced mt-4"><summary>Advanced model & fields</summary><div className="mt-3 space-y-3"><FloatingInput label="Custom model" value={props.model} onChange={props.setModel} placeholder="res.partner" /><label className="input-card"><span>Fields export</span><textarea value={props.fields} onChange={e => props.setFieldsText(e.target.value)} /></label><FloatingInput label="Domain JSON" value={props.domain} onChange={props.setDomain} placeholder="[]" /></div></details><div className="mt-4 grid grid-cols-2 gap-2"><button className="primary-btn" disabled={props.busy || !props.model} onClick={props.scan}>Scan</button><button className="secondary-btn" disabled={props.busy || !props.model} onClick={props.loadSchema}>Schema</button></div><button className="secondary-btn mt-2 w-full" disabled={props.busy} onClick={props.exportProject}>Export Project by ID</button><div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-slate-300"><b>{activePreset?.label || 'Custom'}</b><br />{parseCsvFields(props.fields).length} field siap diexport</div></div>;
-}
-
-function Editor(props: { sheet: SheetState; columns: string[]; schema: Record<string, OdooField> | null; issues: string[]; selectedRows: Record<number, boolean>; setSelectedRows: (x: Record<number, boolean>) => void; updateCell: (row: number, col: string, value: any) => void }) {
-  const { sheet } = props;
-  const selected = Object.values(props.selectedRows).filter(Boolean).length;
-  return <div className="editor-shell"><div className="editor-head"><div><div className="flex flex-wrap gap-2"><span className="mini-badge">{kindIcon(sheet.kind)} {labelKind(sheet.kind)}</span><span className="mini-badge soft">{sheet.model}</span><span className="mini-badge ok">{sheet.rows.length} rows</span><span className="mini-badge soft">{props.columns.length} fields</span></div><h2 className="mt-3 text-2xl font-black">{sheet.name}</h2><p className="mt-1 text-sm text-slate-300">Mobile menampilkan row sebagai kartu. Desktop tetap punya grid untuk edit cepat.</p></div><div className="summary-grid"><Metric label="Issue" value={String(props.issues.length)} /><Metric label="Selected" value={String(selected)} /><Metric label="Schema" value={props.schema ? 'ON' : 'OFF'} /></div></div>{sheet.helper && <Alert tone="amber" text="Sheet ini context/helper. Bisa diedit dan didownload, tapi tidak dikirim ke Odoo." />}{props.issues.length > 0 && <div className="issue-card"><b>Validasi menemukan catatan</b><ul>{props.issues.slice(0, 8).map((x, i) => <li key={i}>{x}</li>)}</ul>{props.issues.length > 8 && <small>+ {props.issues.length - 8} catatan lain</small>}</div>}<div className="md:hidden"><CardRows sheet={sheet} columns={props.columns} schema={props.schema} selectedRows={props.selectedRows} setSelectedRows={props.setSelectedRows} updateCell={props.updateCell} /></div><div className="hidden md:block"><GridRows sheet={sheet} columns={props.columns} schema={props.schema} selectedRows={props.selectedRows} setSelectedRows={props.setSelectedRows} updateCell={props.updateCell} /></div></div>;
-}
-function Alert({ text, tone }: { text: string; tone: 'amber' }) { return <div className={`alert-${tone}`}>{text}</div>; }
-function Metric({ label, value }: { label: string; value: string }) { return <div className="metric"><small>{label}</small><b>{value}</b></div>; }
-
-function CardRows(props: { sheet: SheetState; columns: string[]; schema: Record<string, OdooField> | null; selectedRows: Record<number, boolean>; setSelectedRows: (x: Record<number, boolean>) => void; updateCell: (row: number, col: string, value: any) => void }) {
-  const priority = props.columns.slice(0, 10);
-  return <div className="row-cards">{props.sheet.rows.slice(0, 80).map((row, ri) => <details key={ri} className="row-card" open={ri === 0}><summary><input type="checkbox" checked={Boolean(props.selectedRows[ri])} onChange={e => props.setSelectedRows({ ...props.selectedRows, [ri]: e.target.checked })} onClick={e => e.stopPropagation()} /><span>Row {ri + 1}</span><b>{String(row.name || row.display_name || row._external_id || props.sheet.model || '').slice(0, 40) || 'Record'}</b></summary><div className="row-fields">{priority.map(col => <label key={col}><span>{col}<small>{props.schema?.[col]?.type || 'xlsx'}</small></span><CellInput value={row[col] ?? ''} field={props.schema?.[col]} onChange={v => props.updateCell(ri, col, v)} /></label>)}</div></details>)}{props.sheet.rows.length > 80 && <div className="alert-amber">Mobile menampilkan 80 row pertama agar ringan. Pakai desktop/grid untuk edit massal.</div>}</div>;
-}
-
-function GridRows(props: { sheet: SheetState; columns: string[]; schema: Record<string, OdooField> | null; selectedRows: Record<number, boolean>; setSelectedRows: (x: Record<number, boolean>) => void; updateCell: (row: number, col: string, value: any) => void }) {
-  return <div className="table-shell"><table><thead><tr><th><input type="checkbox" onChange={e => { const next: Record<number, boolean> = {}; if (e.target.checked) props.sheet.rows.forEach((_, i) => next[i] = true); props.setSelectedRows(next); }} /></th><th>#</th>{props.columns.map(col => <th key={col} className={props.schema && !META_COLUMNS.has(col) && !props.schema[col] && !col.endsWith('_external_id') && !col.endsWith('_external_ids') ? 'danger' : ''}><b>{col}</b>{props.schema?.[col] && <small>{props.schema[col].type}{props.schema[col].relation ? ` → ${props.schema[col].relation}` : ''}</small>}</th>)}</tr></thead><tbody>{props.sheet.rows.slice(0, 500).map((row, ri) => <tr key={ri} className={props.selectedRows[ri] ? 'selected' : ''}><td><input type="checkbox" checked={Boolean(props.selectedRows[ri])} onChange={e => props.setSelectedRows({ ...props.selectedRows, [ri]: e.target.checked })} /></td><td>{ri + 1}</td>{props.columns.map(col => <td key={col}><CellInput value={row[col] ?? ''} field={props.schema?.[col]} onChange={v => props.updateCell(ri, col, v)} /></td>)}</tr>)}</tbody></table>{props.sheet.rows.length > 500 && <div className="p-4 text-center text-sm text-slate-400">Ditampilkan 500 row pertama agar browser tetap ringan.</div>}</div>;
-}
-
-function CellInput({ value, field, onChange }: { value: any; field?: OdooField; onChange: (v: any) => void }) {
-  if (field?.type === 'boolean') return <input className="check-input" type="checkbox" checked={['true', '1', 'yes', true].includes(value)} onChange={e => onChange(e.target.checked)} />;
-  if (field?.type === 'selection' && field.selection) return <select className="cell-input" value={value ?? ''} onChange={e => onChange(e.target.value)}><option value="">—</option>{field.selection.map(([k, label]) => <option key={k} value={k}>{label}</option>)}</select>;
-  if (field?.type === 'text' || field?.type === 'html' || String(value || '').length > 120) return <textarea className="cell-input min-h-[70px]" value={value ?? ''} onChange={e => onChange(e.target.value)} />;
-  if (field?.type === 'integer' || field?.type === 'float' || field?.type === 'monetary') return <input className="cell-input" type="number" value={value ?? ''} onChange={e => onChange(e.target.value)} />;
-  if (field?.type === 'date') return <input className="cell-input" type="date" value={String(value || '').slice(0, 10)} onChange={e => onChange(e.target.value)} />;
-  return <input className="cell-input" value={value ?? ''} onChange={e => onChange(e.target.value)} />;
-}
-
-function RecordPicker({ records, selectedIds, setSelectedIds, scanCount }: { records: Row[]; selectedIds: Record<number, boolean>; setSelectedIds: (x: Record<number, boolean>) => void; scanCount: number }) {
-  const [query, setQuery] = useState('');
-  const cols = makeColumns(records).filter(c => c !== 'id').slice(0, 6);
-  const selectedCount = Object.values(selectedIds).filter(Boolean).length;
-  const filtered = records.filter(row => !query.trim() || String(Object.values(row).join(' ')).toLowerCase().includes(query.toLowerCase()));
-  const selectVisible = () => { const next = { ...selectedIds }; filtered.forEach(r => next[Number(r.id)] = true); setSelectedIds(next); };
-  const clearVisible = () => { const next = { ...selectedIds }; filtered.forEach(r => delete next[Number(r.id)]); setSelectedIds(next); };
-  if (!records.length) return <div className="empty-panel"><div>⌕</div><h2>Belum ada record</h2><p>Pilih model di atas, lalu tekan Scan. Record akan muncul sebagai checklist card yang mudah dipilih.</p></div>;
-  return <div className="record-section"><div className="record-top"><label className="search-card"><span>Cari record</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="nama, email, ID, telepon..." /></label><div className="record-actions"><button onClick={selectVisible}>Select visible</button><button onClick={clearVisible}>Clear visible</button><button onClick={() => setSelectedIds({})}>Clear all</button></div></div><div className="record-stats"><Metric label="Scanned" value={`${records.length}/${scanCount}`} /><Metric label="Visible" value={String(filtered.length)} /><Metric label="Selected" value={String(selectedCount)} /></div><div className="record-grid">{filtered.slice(0, 240).map(row => { const id = Number(row.id); const selected = Boolean(selectedIds[id]); const title = String(row.display_name || row.name || row.email || `Record #${id}`); const subtitle = String(row.email || row.phone || row.mobile || row.city || 'Odoo record'); return <button key={id} type="button" onClick={() => setSelectedIds({ ...selectedIds, [id]: !selected })} className={`record-card ${selected ? 'on' : ''}`}><span className="select-dot">{selected ? '✓' : ''}</span><span className="min-w-0 flex-1 text-left"><b>{title}</b><small>{subtitle}</small>{cols.slice(0, 3).map(c => row[c] ? <em key={c}><strong>{c}</strong>{String(row[c]).slice(0, 64)}</em> : null)}</span><i>#{id}</i></button>; })}</div>{filtered.length > 240 && <div className="alert-amber">Ditampilkan 240 record pertama. Gunakan search atau Load More bertahap.</div>}</div>;
-}
-
-function LogDrawer({ logs }: { logs: LogItem[] }) {
-  const [open, setOpen] = useState(false); const last = logs[0];
-  return <section className="log-drawer"><button onClick={() => setOpen(!open)}><span>Activity Log</span><b>{logs.length}</b><small>{last ? `${last.level}: ${last.message}` : 'idle'}</small></button>{open && <div className="log-list">{logs.length === 0 ? <p>Belum ada aktivitas.</p> : logs.map((log, i) => <details key={i} className={`log-item ${log.level}`}><summary>[{log.time}] {log.message}</summary>{log.detail && <pre>{JSON.stringify(log.detail, null, 2)}</pre>}</details>)}</div>}</section>;
-}
+function LogSheet({ logs, open, onClose }: { logs: LogItem[]; open: boolean; onClose: () => void }) { return <div className={open ? 'log-backdrop open' : 'log-backdrop'} onClick={onClose}><aside className="log-sheet" onClick={e => e.stopPropagation()}><div className="log-title"><b>Activity trail</b><button onClick={onClose}>×</button></div>{logs.map((log, idx) => <div key={idx} className={`log-line ${log.level}`}><small>{log.time}</small><span>{log.message}</span>{log.detail && <pre>{JSON.stringify(log.detail, null, 2).slice(0, 1200)}</pre>}</div>)}{!logs.length && <p className="empty-note">Belum ada log.</p>}</aside></div>; }

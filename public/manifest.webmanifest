@@ -1,11 +1,11 @@
 {
-  "name": "Studio2 Lokalmart",
+  "name": "Lokalmart Studio2 Command",
   "short_name": "Studio2",
-  "description": "Odoo XLSX import/export studio for Lokalmart.",
+  "description": "Mission-based Odoo data command studio for Lokalmart.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f8fafc",
-  "theme_color": "#0f172a",
+  "background_color": "#050816",
+  "theme_color": "#050816",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
   ]

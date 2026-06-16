@@ -1,12 +1,11 @@
 # Vercel Public Deployment Note
 
-Untuk PWA/APK, gunakan production domain yang public.
+Kalau URL Vercel meminta login, periksa Deployment Protection / Vercel Authentication.
 
-Kalau muncul halaman login Vercel:
+Untuk PWA/APK, gunakan production deployment yang public/unprotected.
 
-1. Pastikan kamu membuka production domain, bukan preview deployment.
-2. Cek Project Settings → Deployment Protection.
-3. Matikan Vercel Authentication untuk environment yang ingin dibuka publik.
-4. Kalau ingin tetap terlindungi, gunakan password internal di aplikasi Studio2, bukan Vercel preview auth.
+Studio2 adalah admin tool internal, jadi keamanan utama tetap:
 
-Studio2 v9 tidak membutuhkan Render, Cloudflare, ataupun PC lokal aktif.
+- Jangan commit password/API key Odoo ke GitHub.
+- Simpan credential hanya di browser.
+- Pakai akun Odoo dengan hak secukupnya.

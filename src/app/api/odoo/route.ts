@@ -435,7 +435,7 @@ async function handleNameSearch(conn: Conn, body: AnyRow) {
 export async function GET() {
   return json({
     ok: true,
-    app: 'Studio2 v9 Vercel-only Odoo XLSX Studio',
+    app: 'Studio2 v10 Vercel-only Odoo Data Command Studio',
     actions: ['test', 'schema', 'record_scan', 'export_records', 'export_project', 'import_batch', 'name_search'],
     note: 'Designed for short serverless calls. Browser handles XLSX preview/editor/batching.'
   });

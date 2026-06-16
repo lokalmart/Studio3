@@ -1,84 +1,78 @@
-# Studio2 v9.3 — Mobile Command Studio for Odoo XLSX
+# Studio2 v10 — Lokalmart Data Command Studio
 
-Studio2 v9.3 adalah rebuild UI mobile-first untuk kembali ke Vercel tanpa Render, Cloudflare Engine, atau PC lokal aktif.
+Studio2 v10 adalah rebuild UI/UX untuk Vercel-only deployment. Fokusnya bukan lagi “spreadsheet viewer”, tetapi **mission-based command studio** untuk operasi data Odoo Lokalmart.
 
-Arah v9.3:
+## Prinsip desain v10
 
-- Bukan spreadsheet viewer mentah.
-- Bukan dashboard penuh card yang cluttered.
-- UI dibuat seperti mobile command app: satu workflow, satu aksi utama, panel ringkas, bottom navigation, dan editor card di HP.
-- API Vercel tetap hanya menjadi jembatan pendek ke Odoo.
-- Import dilakukan per batch kecil agar aman untuk batas serverless.
+- Mobile-first, bukan desktop panel yang dipaksa mengecil.
+- Home sebagai **Mission Launcher**: Import, Export, Review, Koneksi.
+- Export model berupa checklist card, bukan input teks mentah.
+- Spreadsheet grid hanya mode tambahan; default editor berupa object cards.
+- Progressive disclosure: schema, domain, field teknis, dan log disembunyikan sampai dibutuhkan.
+- Vercel-safe: browser membaca XLSX, API hanya request kecil ke Odoo.
 
-## Struktur
+## Fitur utama
 
-```txt
-/
-├─ src/app/page.tsx
-├─ src/app/api/odoo/route.ts
-├─ src/app/globals.css
-├─ public/manifest.webmanifest
-├─ package.json
-├─ vercel.json
-└─ README.md
-```
+### Import Mission
+
+Upload XLSX → Review sheet → Cek schema → Object editor → Import batch kecil ke Odoo.
+
+### Export Mission
+
+Pilih model via checklist card → Scan record → Pilih record → Export ke editor → Download XLSX.
+
+Preset model:
+
+- Contacts (`res.partner`)
+- Products (`product.template`)
+- Projects (`project.project`)
+- Tasks (`project.task`)
+- Knowledge (`knowledge.article`)
+- Sales (`sale.order`)
+- Categories (`product.category`)
+- Web Categories (`product.public.category`)
+
+### Review Workspace
+
+Default editor berupa card accordion per row. Grid spreadsheet tetap tersedia untuk edit cepat di desktop.
 
 ## Deploy ke Vercel
 
-1. Copy isi ZIP ke root repo GitHub.
-2. Pastikan `package.json` ada langsung di root repo.
-3. Di Vercel pilih **New Project**.
-4. Framework preset: **Next.js**.
-5. Root directory: kosong/default.
-6. Deploy.
+Pastikan struktur repo root seperti ini:
 
-## Setelah deploy
+```text
+/package.json
+/next.config.mjs
+/vercel.json
+/src/app/page.tsx
+/src/app/api/odoo/route.ts
+/public/manifest.webmanifest
+```
 
-Buka production domain Vercel. Di Studio2 tekan **⚙ Koneksi**, lalu isi:
+Di Vercel:
+
+- Framework preset: Next.js
+- Root Directory: kosong/default root repo
+- Build Command: default
+- Output Directory: default
+
+## Koneksi Odoo
+
+Buka Studio2 → Koneksi → isi:
 
 - Odoo URL
 - Database
 - Username/email
-- Password atau API key
+- Password/API key
 
 Credential disimpan di browser `localStorage`, bukan di GitHub.
 
-## Perubahan penting v9.3
+## Catatan batasan Vercel
 
-- Layout mobile-first, bukan desktop-first.
-- Bottom navigation untuk Import, Export, Koneksi.
-- Import dimulai dari hero upload yang jelas.
-- Setelah XLSX dibuka, sheet tampil sebagai horizontal picker.
-- Action utama dibuat sticky: Import / Export selalu jelas.
-- Editor mobile memakai row cards, bukan tabel kecil yang tidak terbaca.
-- Desktop tetap punya spreadsheet grid untuk edit massal.
-- Export model memakai checklist mission cards.
-- Record picker tetap card checklist.
-- Log dibuat drawer bawah, bukan panel samping yang memakan ruang.
-
-## Mode Import
-
-1. Pilih XLSX.
-2. Pilih sheet.
-3. Load schema jika ingin validasi field Odoo.
-4. Edit row sebagai card di mobile atau grid di desktop.
-5. Import batch kecil.
-
-## Mode Export
-
-1. Pilih model dari mission cards.
-2. Scan record.
-3. Pilih record sebagai checklist card.
-4. Export record terpilih.
-5. Hasil export masuk ke editor XLSX.
-6. Download setelah diedit.
-
-## Catatan batas Vercel
-
-Agar aman di Vercel free/hobby:
+Studio2 v10 tetap memakai Vercel serverless, jadi jangan paksa satu request untuk export/import semua database. Gunakan pola aman:
 
 - Import 10–30 row per batch.
-- Export record terpilih, bukan seluruh database.
+- Export record terpilih, bukan full database mentah.
 - Pilih field seperlunya.
-- Hindari image base64, chatter, dan HTML panjang kecuali perlu.
+- Hindari chatter, HTML panjang, dan image base64 kecuali benar-benar perlu.
 

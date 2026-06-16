@@ -1,17 +1,12 @@
-# Catatan Clean Slate
+# Clean Slate Note
 
-Jika repo sebelumnya berisi Studio2 lama, hapus file/folder berikut sebelum menyalin v9:
+Kalau repo sebelumnya berisi versi HTML lama, hapus file lama berikut sebelum upload v10:
 
-```txt
+```text
 index.html
 assistant.html
-assistant/
 api/odoo.js
 scripts/check-html.js
-apps/web
-apps/engine
-render.yaml
-wrangler.toml
 ```
 
-Untuk repo baru yang benar-benar kosong, catatan ini bisa diabaikan.
+Untuk repo baru clean slate, cukup upload semua isi ZIP v10 ke root repo.
