@@ -198,7 +198,7 @@ function Header({ mode, setMode, onSettings, target }: any) {
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 font-black text-black">LM</div>
         <div>
           <h1 className="text-lg font-black leading-tight">Lokalmart Studio2 v8</h1>
-          <p className="text-xs text-orange-100/70">Vercel UI · Render Engine · Native-like Odoo XLSX editor</p>
+          <p className="text-xs text-orange-100/70">Render UI · Render Engine · Native-like Odoo XLSX editor</p>
         </div>
       </div>
       <div className="flex items-center gap-2">

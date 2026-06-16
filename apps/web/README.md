@@ -1,15 +1,32 @@
-# Studio2 Web
+# Studio2 Web (Render)
 
-Next.js frontend untuk Vercel.
+Next.js frontend untuk Render Web Service.
 
-## Deploy Vercel
+## Deploy Render
 
-Root Directory: `apps/web`
+Root Directory:
 
-Optional env:
+```text
+apps/web
+```
+
+Build Command:
 
 ```bash
+npm install && npm run build
+```
+
+Start Command:
+
+```bash
+npm start
+```
+
+Environment optional:
+
+```bash
+NODE_VERSION=20
 NEXT_PUBLIC_DEFAULT_ENGINE_URL=https://studio2-engine.onrender.com
 ```
 
-Target Odoo dan Engine API Key diisi dari UI pengaturan dan disimpan di localStorage browser.
+Kalau URL engine berubah, kamu tetap bisa mengisinya dari tombol pengaturan di UI Studio2.

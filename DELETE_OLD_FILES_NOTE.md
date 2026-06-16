@@ -1,6 +1,6 @@
 # File lama yang perlu dihapus dari Studio2 repo
 
-Karena v8 adalah rebuild hybrid, hapus file lama yang bentrok:
+Karena v8.1 adalah rebuild Render-only, hapus file lama yang bentrok:
 
 - `index.html`
 - `assistant.html`
@@ -8,9 +8,9 @@ Karena v8 adalah rebuild hybrid, hapus file lama yang bentrok:
 - `scripts/check-html.js`
 - patch README lama jika sudah tidak dipakai
 
-Setelah itu copy struktur v8 ini ke repo.
+Setelah itu copy struktur v8.1 ini ke repo.
 
-Deploy:
+Deploy di Render sebagai dua Web Service:
 
-- Vercel Root Directory: `apps/web`
-- Render Root Directory: `apps/engine`
+- `apps/web` → Studio2 UI
+- `apps/engine` → Studio2 Engine

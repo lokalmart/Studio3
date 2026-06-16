@@ -1,5 +1,18 @@
 services:
   - type: web
+    name: studio2-web
+    runtime: node
+    rootDir: apps/web
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    plan: starter
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NEXT_PUBLIC_DEFAULT_ENGINE_URL
+        value: https://studio2-engine.onrender.com
+
+  - type: web
     name: studio2-engine
     runtime: node
     rootDir: apps/engine
@@ -12,6 +25,6 @@ services:
       - key: STUDIO2_ENGINE_API_KEY
         generateValue: true
       - key: CORS_ORIGIN
-        value: "*"
+        value: '*'
       - key: JOB_DIR
         value: /tmp/studio2-jobs

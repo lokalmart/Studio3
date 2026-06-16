@@ -5,7 +5,7 @@ function cleanBase(baseUrl: string) {
 }
 
 export async function engineFetch(config: EngineConfig, path: string, init: RequestInit = {}) {
-  if (!config.baseUrl) throw new Error('Engine URL Render belum diisi.');
+  if (!config.baseUrl) throw new Error('Engine URL belum diisi.');
   const headers: Record<string, string> = { ...(init.headers as any || {}) };
   if (!(init.body instanceof FormData)) headers['content-type'] = headers['content-type'] || 'application/json';
   if (config.apiKey) headers['x-studio2-key'] = config.apiKey;
