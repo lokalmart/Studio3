@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: studio2-engine
+    runtime: node
+    rootDir: apps/engine
+    buildCommand: npm install
+    startCommand: npm start
+    plan: starter
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: STUDIO2_ENGINE_API_KEY
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: JOB_DIR
+        value: /tmp/studio2-jobs
