@@ -1,86 +1,89 @@
-# Lokalmart Studio v3 — Clean Vercel Rebuild
+# Studio2 v9 — Vercel-only Odoo XLSX Studio
 
-Studio ini dibuat ulang dari nol khusus untuk Vercel. Tujuannya: ringan, mudah dipahami, dan tidak bergantung pada banyak file `lib` yang bisa membuat seluruh API mati kalau satu file rusak.
+Studio2 v9 adalah rebuild bersih untuk kembali ke Vercel tanpa Render, Cloudflare Engine, atau PC lokal aktif.
+
+Prinsip v9:
+
+- UI + editor XLSX berjalan di browser.
+- API Vercel hanya menjadi jembatan pendek ke Odoo.
+- Import dilakukan per batch kecil, bukan satu file besar.
+- Export dimulai dari scan record, pilih record, pilih field, baru export.
+- Foto besar, chatter panjang, dan HTML berat tidak diexport/import otomatis tanpa dipilih.
 
 ## Struktur
 
-```text
+```txt
 /
-├─ index.html              # UI utama mobile-first
-├─ assistant.html          # route /assistant -> /#assistant
-├─ assistant/index.html    # fallback route fisik
-├─ api/odoo.js             # satu endpoint backend Vercel
+├─ src/app/page.tsx
+├─ src/app/api/odoo/route.ts
+├─ public/manifest.webmanifest
 ├─ package.json
 ├─ vercel.json
-└─ scripts/check-html.js
+└─ README.md
 ```
-
-## Fitur utama
-
-- Target Odoo tersimpan di browser/localStorage.
-- Tes koneksi memakai isi form yang sedang dibuka, bukan target lama.
-- Import XLSX generic ke Odoo:
-  - `_model`
-  - `__action`
-  - `_external_id`
-  - Many2one: `field_external_id`
-  - Many2many: `field_external_ids`
-  - `image_url` otomatis masuk ke `image_1920` jika field tersedia.
-- Scan schema model dan custom field `x_`.
-- Audit data model inti.
-- Export context umum untuk ChatGPT.
-- Export satu project terpilih:
-  - `project.project`
-  - `project.task`
-  - task/subtask hierarchy
-  - `project.milestone`
-  - `project.update`
-  - chatter ringkas dari `mail.message`
-  - external IDs
-  - prompt siap copy ke ChatGPT.
-- Full/partial export JSON atau XLSX.
-- Barcode lookup.
 
 ## Deploy ke Vercel
 
-1. Replace isi repo dengan file-file ini.
-2. Commit ke GitHub.
-3. Hubungkan Vercel ke repo.
-4. Setting Vercel:
+1. Buat repo GitHub baru atau gunakan repo clean slate.
+2. Copy semua isi folder ini ke root repo.
+3. Push ke GitHub.
+4. Di Vercel, pilih **New Project**.
+5. Import repo.
+6. Framework preset: **Next.js**.
+7. Root directory: kosong/default root repo.
+8. Build command: default `next build`.
+9. Deploy.
 
-```text
-Root Directory: kosong / root repo
-Build Command: kosong
-Output Directory: kosong
-Install Command: npm install
-```
+## Setelah deploy
 
-5. Redeploy.
-6. Tes:
+Buka production domain Vercel, bukan preview deployment kalau preview kamu masih kena Vercel Authentication.
 
-```text
-/
-/assistant
-/api/odoo
-```
+Di Studio2, klik **⚙ Koneksi** lalu isi:
 
-`/api/odoo` harus menampilkan JSON `Lokalmart Studio v3 Vercel API` ketika dibuka via browser.
+- Odoo URL: `https://nama-odoo.odoo.com`
+- Database
+- Username/email
+- Password atau API key
 
-## Odoo Online Login
+Data koneksi disimpan di browser localStorage, bukan di GitHub.
 
-Untuk Odoo Online, sering kali password login web tidak bisa dipakai oleh external API. Gunakan API Key dari Odoo sebagai pengganti password.
+## Mode Import
 
-Target contoh:
+1. Upload XLSX.
+2. Pilih sheet.
+3. Cek editor sesuai model:
+   - `res.partner` → Contact Editor
+   - `product.template` / `product.product` → Product Editor
+   - `project.*` → Project Editor
+   - `knowledge.article` → Knowledge Editor
+   - model lain → Dynamic Odoo Editor
+4. Klik **Schema** untuk validasi field terhadap Odoo.
+5. Import per batch kecil. Default 20 row.
 
-```text
-URL: https://edu-lokalmart.odoo.com
-Database: edu-lokalmart
-Username: email user admin di database Odoo
-Password / API Key: API key Odoo
-```
+## Mode Export
 
-Jangan pakai URL yang berakhir `/web`.
+1. Isi model, contoh `res.partner`.
+2. Isi fields yang ingin diexport, pisahkan koma.
+3. Klik **Scan**.
+4. Pilih record yang ingin diexport.
+5. Klik **Export Record Terpilih**.
+6. Hasil masuk ke editor XLSX.
+7. Download XLSX jika sudah rapi.
 
-## Catatan penting
+## Catatan batas Vercel
 
-Versi ini sengaja memakai satu API file: `api/odoo.js`. Jangan campur dengan folder `lib/` lama atau file Netlify lama jika tujuannya deploy di Vercel.
+Vercel bukan worker panjang. Studio2 v9 sengaja tidak membuat job berat di server. Kalau ingin export/import sangat besar:
+
+- Kurangi field.
+- Scan per halaman.
+- Pilih record tertentu.
+- Import batch 10–30 row.
+- Hindari image base64 dan HTML/chatter panjang.
+
+## Keamanan
+
+Jangan commit credential Odoo ke repo.
+
+Tidak ada `.env` wajib untuk versi ini. Semua koneksi diisi dari UI dan disimpan di browser kamu.
+
+Kalau app ini untuk internal, gunakan akun Vercel pribadi dan jangan sebar URL Studio2 sembarangan. Untuk protection tambahan tanpa mengunci PWA/public domain, bisa dibuat password internal di versi berikutnya.

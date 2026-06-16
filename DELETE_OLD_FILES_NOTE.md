@@ -1,18 +1,17 @@
-# Hapus file lama sebelum memakai Studio v3
+# Catatan Clean Slate
 
-Untuk menghindari konflik, hapus atau abaikan file lama berikut jika ada:
+Jika repo sebelumnya berisi Studio2 lama, hapus file/folder berikut sebelum menyalin v9:
 
-- `netlify.toml`
-- `_redirects`
-- `netlify/functions/*`
-- `lib/*` dari Studio lama
-- patch Vercel/Netlify lama yang berada dalam folder pembungkus
+```txt
+index.html
+assistant.html
+assistant/
+api/odoo.js
+scripts/check-html.js
+apps/web
+apps/engine
+render.yaml
+wrangler.toml
+```
 
-Yang harus ada untuk Vercel v3:
-
-- `index.html`
-- `assistant.html`
-- `assistant/index.html`
-- `api/odoo.js`
-- `package.json`
-- `vercel.json`
+Untuk repo baru yang benar-benar kosong, catatan ini bisa diabaikan.
